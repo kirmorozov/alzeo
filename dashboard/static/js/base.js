@@ -135,12 +135,12 @@ const READY_DEFAULT = {[U27]: 540, [UFLASH]: 780, [FLASH_LOCAL_UNIT]: 1020, [KOL
 const TARGET_SHORT = {stock: 'stock', uncensored: 'uncensored', fp8: 'FP8', 'uncensored-fp8': 'FP8 uncensored',
                       flash: '', 'flash-uncensored': 'uncensored', 'flash-nvda': 'NVIDIA export', image: '2.1', 'image-turbo': 'Turbo', video: 'H3',
                       kolibri: 'FP8', 'kolibri-nvfp4': 'NVFP4', nemotron: 'Bolt', 'nemotron-super': 'Super VL',
-                      'flash-local': 'FP4-Local', 'ornith-122b': '122B'};
+                      'flash-local': 'FP4-Local', 'flash-local-dflash2': 'DFlash2', 'ornith-122b': '122B'};
 const TARGET_UNIT = t => t === 'image' || t === 'image-turbo' ? IMAGE_UNIT : t === 'video' ? VIDEO_UNIT
   : String(t).startsWith('kolibri') ? KOLIBRI_UNIT : t === 'nemotron-super' ? NEMOTRON_SUPER_UNIT : String(t).startsWith('nemotron') ? NEMOTRON_UNIT
-  : t === 'flash-local' ? FLASH_LOCAL_UNIT : t === 'ornith-122b' ? ORNITH_UNIT : String(t).startsWith('flash') ? UFLASH : U27;
+  : t === 'flash-local' || t === 'flash-local-dflash2' ? FLASH_LOCAL_UNIT : t === 'ornith-122b' ? ORNITH_UNIT : String(t).startsWith('flash') ? UFLASH : U27;
 const LANE_TARGETS = {[U27]: ['stock', 'uncensored', 'fp8', 'uncensored-fp8'], [UFLASH]: ['flash', 'flash-uncensored', 'flash-nvda'],
-                      [FLASH_LOCAL_UNIT]: ['flash-local'],
+                      [FLASH_LOCAL_UNIT]: ['flash-local', 'flash-local-dflash2'],
                       [KOLIBRI_UNIT]: ['kolibri', 'kolibri-nvfp4'], [NEMOTRON_UNIT]: ['nemotron'], [NEMOTRON_SUPER_UNIT]: ['nemotron-super'],
                       [ORNITH_UNIT]: ['ornith-122b'], [IMAGE_UNIT]: ['image', 'image-turbo'], [VIDEO_UNIT]: ['video']};
 const TARGET_NAME = {stock: '27B stock, NVFP4', uncensored: '27B uncensored, NVFP4', fp8: '27B FP8, Qwen official',
@@ -148,12 +148,14 @@ const TARGET_NAME = {stock: '27B stock, NVFP4', uncensored: '27B uncensored, NVF
                      'flash-nvda': 'flash 176B, NVIDIA export', image: 'Qwen-Image 2.1', 'image-turbo': 'Qwen-Image 2.1 Turbo', video: 'MiniMax-H3',
                      kolibri: 'Kolibri-1, Aleph Alpha FP8', 'kolibri-nvfp4': 'Kolibri-1, NVFP4 experts', nemotron: 'Nemotron 3.5 Bolt, 24 GB',
                      'nemotron-super': 'Nemotron 3.5 Super VL, NVFP4', 'flash-local': 'Flash FP4-Local, NVIDIA',
+                     'flash-local-dflash2': 'Flash FP4-Local, NVIDIA + DFlash2',
                      'ornith-122b': 'Ornith 1.5 122B, NVFP4'};
 // A version's name on its button in Lanes, and the line that tells it apart once chosen. A
 // target is declared in the tables of this block: a page test fails when one lacks a name or a line.
 const TARGET_SHORT_NAME = {stock: 'Stock', uncensored: 'Uncensored', fp8: 'FP8', 'uncensored-fp8': 'FP8 uncensored',
   flash: 'Standard', 'flash-uncensored': 'Uncensored', 'flash-nvda': 'NVIDIA export', image: 'Base', 'image-turbo': 'Turbo', video: 'H3',
   kolibri: 'FP8', 'kolibri-nvfp4': 'NVFP4', nemotron: 'Bolt', 'nemotron-super': 'Super VL', 'flash-local': 'FP4-Local',
+  'flash-local-dflash2': 'FP4-Local + DFlash2',
   'ornith-122b': '122B'};
 const TARGET_LINE = {
   stock: 'The default: smallest and fastest', uncensored: 'Refusals removed, same size and speed',
@@ -163,7 +165,8 @@ const TARGET_LINE = {
   kolibri: "Aleph Alpha's own weights: the reference", 'kolibri-nvfp4': '4-bit experts: faster under load, French a little weaker',
   nemotron: 'The one version: 2-bit experts and their drafter',
   'nemotron-super': 'The one version: NVFP4 and its drafter, a 1M window',
-  'flash-local': 'The one version: NVIDIA’s FP4 build and its MTP head',
+  'flash-local': "The lane's default: NVIDIA's FP4 build and its MTP head",
+  'flash-local-dflash2': "the same build, drafted by incoai's DFlash2 drafter",
   'ornith-122b': 'The one version: its authors’ NVFP4 build and its MTP head'};
 const TARGET_NOTE = {
   stock: 'The NVFP4 quantization this repo pins by default: smallest and fastest of the 27B targets.',
@@ -181,6 +184,7 @@ const TARGET_NOTE = {
   nemotron: 'NVIDIA’s Nemotron 3.5 Bolt, its experts in 2 bits, served as its model card says: vLLM nightly with b12x, its LiLiCorr drafter, 262,144 tokens of context, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request). It reads images and video. Measured on this box: 140 tokens/s alone on code, 50 on prose, 201 in all at 16 requests, 24 requests at the full window. The first switch downloads about 26 GB.',
   'nemotron-super': 'NVIDIA’s Nemotron 3.5 Super VL in NVFP4, served as its model card says for a DGX Spark: its LiLiCorr drafter, a window of 1,048,576 tokens, the Mamba state in float16 with stochastic rounding, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request), in the Nemotron Bolt lane’s vLLM image. It reads images and video. Measured on this box: 70 tokens/s alone on code, 31 on prose, its whole window 1.1 to 1.3 times over in its cache. The first switch downloads about 77 GB.',
   'flash-local': 'NVIDIA’s own FP4 build of the flash model, served as its model card says for a DGX Spark: vLLM with b12x, its experts and its n-gram table in NVFP4 after a quantization-aware distillation from the full precision (GPQA Diamond 91.5 % against 92.2 % on NVIDIA’s card), an MTP head drafting 4 tokens, 262,144 tokens of context and a KV cache of about 920,000 tokens, reasoning on at xhigh unless a request asks less. Its table is read at every token: with the HF cache on another disk, its first Load copies the table’s files (32 GB) beside your home directory. The first boot tunes b12x’s kernels for this GPU, about 17 min; the next ones take about 6. The first switch downloads about 102 GB.',
+  'flash-local-dflash2': 'The same FP4 build and the same serving command, drafted by incoai’s DFlash2 drafter for this model (about 1.2 GB, fetched with the checkpoint on the first switch) instead of its own MTP head: the drafter’s capture plugin is mounted read-only at /opt/df2-plugin beside the key middleware, and the target compiles into its own caches, flash-local-cache-dflash2/, because the AOT artifacts of one drafter’s graph are not reusable by the other’s. The box serves it under the same name, qwen3.8-flash-next-fp4.',
   'ornith-122b': 'Ornith AI’s Ornith 1.5 122B (MIT) in its authors’ NVFP4 build, served by vLLM with b12x in the Flash FP4-Local lane’s image: its experts and output head in NVFP4, its projections in FP8, an MTP head drafting 2 tokens, 1,048,576 tokens of context (its own 262,144 stretched four times with YaRN), temperature 0.6, top_p 0.95, top_k 20, reasoning on (off with effort none or minimal). It reads images and video. The first switch downloads about 78 GB.'};
 // What installs a lane this box does not have. Since v1.20 a plain ./install.sh installs
 // every lane, so one missing here was left out (a --no-<lane> on the last run) or did not fit:

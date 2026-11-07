@@ -101,8 +101,8 @@ class TheUninstallUntagsItsOwnTagOnly(unittest.TestCase):
         # it tagged its image at every run and never untagged one it no longer pins: each bump of
         # the pin would have left 18 GB no prune reclaims (found in review, 2026-10-20)
         text = (REPO / "install-flash-local.sh").read_text()
-        tag = text.index('pin_tag flash-local "$FLASH_LOCAL_IMAGE"')
-        self.assertIn('unpin_stale flash-local "$FLASH_LOCAL_IMAGE" || true', text[tag:tag + 200])
+        tag = text.index('pin_tag flash-local "$LOCAL_IMAGE"')
+        self.assertIn('unpin_stale flash-local "$LOCAL_IMAGE" || true', text[tag:tag + 200])
         self.assertNotIn("unpin_stale() {", TEXT, "one definition, in lanes.sh")
 
     def test_the_flash_local_uninstall_calls_it_and_prunes_no_shared_repository(self):

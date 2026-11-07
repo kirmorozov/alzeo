@@ -61,6 +61,9 @@ LABEL = {"stock": "Qwen3.8-27B NVFP4 + DFlash2",
          "nemotron-super": "Nemotron 3.5 Super VL",
          # NVIDIA's own FP4-Local build of the flash model, a lane of its own on vLLM.
          "flash-local": "Qwen3.8-Flash-Next FP4-Local NVIDIA + MTP",
+         # the lane's second target serves the same checkpoint under the same name, drafted by
+         # incoai's DFlash2 drafter: the label says which drafter serves
+         "flash-local-dflash2": "Qwen3.8-Flash-Next FP4-Local NVIDIA + DFlash2",
          # Ornith AI's Ornith 1.5 122B, a lane of its own on vLLM.
          "ornith-122b": "Ornith 1.5 122B NVFP4 + MTP"}
 

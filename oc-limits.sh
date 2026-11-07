@@ -261,7 +261,7 @@ case "$CHOICE" in
     #     990,000 - 20,000 + 43,863 + 32,000 = 1,045,863  <=  1,048,576
     CTX=990000; OUT=32000; LABEL="local, 1M"
     ;;
-  flash-local)
+  flash-local|flash-local-dflash2)
     # The Flash FP4-Local lane serves the flash lane's 262,144-token window, and vLLM refuses any
     # request whose prompt + max_tokens passes it. Its KV cache holds 921,090 tokens at the card's
     # memory share (measured 2026-10-19), the window 3.5 times over, so the window decides, by the

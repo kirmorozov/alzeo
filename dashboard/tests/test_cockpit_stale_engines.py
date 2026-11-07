@@ -38,7 +38,8 @@ class AnUpdateOwedToAServingEngine(unittest.TestCase):
         (cls.tmp / "api-key").write_text("k\n")
         cls.units = cls.tmp / "units"
         cls.units.mkdir()
-        for u in ("qwen38-sglang.service", "qwen38-nemotron.service", "qwen38-image.service", "qwen38-keepalive.service"):
+        for u in ("qwen38-sglang.service", "qwen38-nemotron.service", "qwen38-image.service",
+                  "qwen38-flash-local.service", "qwen38-keepalive.service"):
             (cls.units / u).write_text("[Service]\nExecStart=/bin/true\n")
         os.environ.update(COCKPIT_DRY_RUN="1", COCKPIT_CONFIG_DIR=str(cls.tmp), COCKPIT_REPO_DIR=str(DASH.parent),
                           COCKPIT_PORT="0", COCKPIT_AGENT_PORT="0", COCKPIT_AUTOHEAL="0",
@@ -98,7 +99,8 @@ class AnUpdateOwedToAServingEngine(unittest.TestCase):
     def test_only_installed_engine_units_are_read_and_never_the_proxy(self):
         calls = self.fake({})
         self.cp.stale_engines()
-        self.assertEqual(sorted(calls), ["qwen38-image.service", "qwen38-nemotron.service", "qwen38-sglang.service"])
+        self.assertEqual(sorted(calls), ["qwen38-flash-local.service", "qwen38-image.service",
+                                         "qwen38-nemotron.service", "qwen38-sglang.service"])
 
     def test_the_update_collector_carries_it_with_the_release_check_off(self):
         u = str(self.units / "qwen38-nemotron.service")
@@ -139,9 +141,30 @@ class AnUpdateOwedToAServingEngine(unittest.TestCase):
         self.fake({})
         self.cp.stale_engines()
         cfg = self.cp.CONFIG_DIR
-        for unit in ("qwen38-kolibri.service", "qwen38-nemotron.service", "qwen38-nemotron-super.service"):
+        for unit in ("qwen38-kolibri.service", "qwen38-nemotron.service", "qwen38-nemotron-super.service",
+                     "qwen38-flash-local.service"):
             self.assertIn(unit, self.cp.VLLM_UNITS)
         self.assertEqual(self.kws["qwen38-nemotron.service"]["extra"], [str(cfg / "vllm-auth/vllm_engine_auth.py")])
+        # the Flash FP4-Local lane's DFlash2 capture plugin, every file of its copy, named besides
+        # its key middleware: the engine reads it at its start on the lane's flash-local-dflash2
+        # target, so a change of it owes a restart; no copy (the target not installed), nothing named
+        self.assertEqual(self.kws["qwen38-flash-local.service"]["extra"], [str(cfg / "vllm-auth/vllm_engine_auth.py")])
+        plugin = cfg / "flash-local-dflash2"
+        (plugin / "flash_local_dflash2").mkdir(parents=True)
+        (plugin / "flash_local_dflash2" / "model.py").write_text("# the capture\n")
+        (plugin / "flash_local_dflash2" / "__pycache__").mkdir()
+        (plugin / "flash_local_dflash2" / "__pycache__" / "model.cpython-312.pyc").write_bytes(b"x")
+        (plugin / "flash_local_dflash2-0.0.0.dist-info").mkdir()
+        (plugin / "flash_local_dflash2-0.0.0.dist-info" / "entry_points.txt").write_text("[vllm.general_plugins]\n")
+        try:
+            self.fake({})
+            self.cp.stale_engines()
+            self.assertEqual(self.kws["qwen38-flash-local.service"]["extra"],
+                             [str(cfg / "vllm-auth/vllm_engine_auth.py"),
+                              str(plugin / "flash_local_dflash2-0.0.0.dist-info" / "entry_points.txt"),
+                              str(plugin / "flash_local_dflash2" / "model.py")])
+        finally:
+            shutil.rmtree(plugin)
         self.assertEqual(self.kws["qwen38-sglang.service"]["extra"], [])
         self.assertEqual(self.kws["qwen38-image.service"]["extra"], [])
 

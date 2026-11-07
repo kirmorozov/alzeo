@@ -121,6 +121,29 @@ class Fetch(unittest.TestCase):
         self.snap("RadixArk/Qwen3.8-27B-NVFP4", self.pins["STOCK_REV"])
         self.assertEqual(self.targets()["stock"]["state"], "complete")
 
+    def test_the_flash_local_targets_read_their_checkpoints_their_own_way(self):
+        # the lane's two targets share the checkpoint: flash-local reads it alone,
+        # flash-local-dflash2 reads it with its DFlash2 drafter, whole with its drafter whole,
+        # begun with either begun, as the Nemotron lanes do
+        model, draft = "nvidia/Qwen3.8-Flash-Next-FP4-Local", "incoai/Qwen3.8-Flash-Next-DFlash2"
+        pin, dpin = self.cp.TARGET_PIN["flash-local"], self.cp.TARGET_DRAFT_PIN["flash-local-dflash2"]
+        self.assertEqual(self.cp.TARGET_PIN["flash-local-dflash2"], pin, "one checkpoint for the lane's two targets")
+        self.setUp()
+        self.assertEqual(self.targets()["flash-local"]["state"], "absent")
+        self.assertEqual(self.targets()["flash-local-dflash2"]["state"], "absent")
+        self.snap(model, self.pins[pin])
+        self.assertEqual(self.targets()["flash-local"]["state"], "complete")
+        self.assertEqual(self.targets()["flash-local-dflash2"]["state"], "incomplete", "its drafter is missing")
+        self.snap(draft, self.pins[dpin], whole=False)
+        self.assertEqual(self.targets()["flash-local-dflash2"]["state"], "incomplete", "its drafter is begun")
+        shutil.rmtree(self.hub / ("models--" + draft.replace("/", "--")))
+        self.snap(draft, self.pins[dpin])
+        self.assertEqual(self.targets()["flash-local-dflash2"]["state"], "complete")
+        shutil.rmtree(self.hub / ("models--" + model.replace("/", "--")))
+        self.assertEqual(self.targets()["flash-local"]["state"], "absent")
+        self.assertEqual(self.targets()["flash-local-dflash2"]["state"], "incomplete",
+                         "its checkpoint is gone, its drafter alone")
+
     def test_the_action_runs_the_switch_with_fetch_and_nothing_else(self):
         code, body = self.cp.start_action("fetch", {"target": "kolibri-nvfp4"})
         self.assertEqual(code, 202, body)

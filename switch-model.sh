@@ -16,6 +16,7 @@
 #   ./switch-model.sh nemotron        # nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB and its drafter (vLLM nightly + b12x)
 #   ./switch-model.sh nemotron-super  # nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4 and its drafter (the same image)
 #   ./switch-model.sh flash-local     # nvidia/Qwen3.8-Flash-Next-FP4-Local, NVIDIA's FP4 build of the flash model (vLLM + b12x)
+#   ./switch-model.sh flash-local-dflash2 # the same checkpoint with incoai's DFlash2 drafter, beside it (the lane's second target)
 #   ./switch-model.sh ornith-122b     # ornith-ai/Ornith-1.5-122B-NVFP4, Ornith AI's mixture of experts (vLLM + b12x)
 #   ./switch-model.sh <target> --fetch  # that target's checkpoint only, into the cache; nothing else changes
 #
@@ -57,7 +58,7 @@ _ENV_HF_CACHE="${HF_CACHE:-}"      # before the pins below give it install.sh's 
 # 27B lane and restarting what follows it, where the usage was all anyone wanted (found
 # in review, 2026-09-24). MODEL_CHOICE= still names one, as install.sh takes it.
 CHOICE="${1:-${MODEL_CHOICE:-}}"
-case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|ornith-122b> [--fetch]\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
+case "$CHOICE" in stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|flash-local-dflash2|ornith-122b) ;; *) printf 'usage: ./switch-model.sh <stock|uncensored|fp8|uncensored-fp8|flash|flash-nvda|flash-uncensored|image|image-turbo|video|kolibri|kolibri-nvfp4|nemotron|nemotron-super|flash-local|flash-local-dflash2|ornith-122b> [--fetch]\n' >&2; [ -z "$CHOICE" ] && exit 2; die "unknown target: $CHOICE" ;; esac
 # --fetch: the target's checkpoint only, fetched as a switch fetches it (the cache first,
 # resumable, its room checked), and nothing else: no unit, no boot, no engine, no record.
 # Library's Download runs it, and a lane installed without its weights gets them so.
@@ -480,27 +481,37 @@ fi
 # is rendered by the lane's installer (install-flash-local.sh --stage, no sudo), which first makes
 # its chat template and, when the cache is on another disk than the home directory's, the copies of
 # its n-gram table the unit mounts (ple-table.py says why): one renderer, so a switch after the pins
-# moved, or after the cache moved, puts in the unit an install would.
+# moved, or after the cache moved, puts in the unit an install would. The lane's two targets share
+# the unit: flash-local names no drafter, flash-local-dflash2 its DFlash2 drafter, fetched with the
+# checkpoint here, as the Nemotron lanes fetch theirs.
 FLASH_LOCAL_UNIT="/etc/systemd/system/qwen38-flash-local.service"
 FLASH_LOCAL_UNIT_NAME="qwen38-flash-local.service"
 # Rewritten with sudo, so staged at a fixed path the cockpit's exact-argv sudoers allowlist names,
 # as the other lanes' units are.
 FLL_STAGE="$CONFIG_DIR/qwen38-flash-local.service.switch-stage"
-if [ "$CHOICE" = "flash-local" ]; then
+if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
   [ -f "$FLASH_LOCAL_UNIT" ] || die "the Flash FP4-Local lane is not installed on this box (no $FLASH_LOCAL_UNIT). Install it once: ./install.sh --with-flash-local (about 121 GB)"
-  # The checkpoint, its pinned revision, the image and the size, from the lane's installer, the one
-  # place they are declared.
-  eval "$(grep -E '^FLASH_LOCAL_(REPO|REV|IMAGE|GB)=' "$REPO_DIR/install-flash-local.sh" || true)"
-  for _v in FLASH_LOCAL_REPO FLASH_LOCAL_REV FLASH_LOCAL_IMAGE FLASH_LOCAL_GB; do
+  # The checkpoint, its pinned revision, the image, the size, and the DFlash2 drafter the
+  # flash-local-dflash2 target loads with the checkpoint, from the lane's installer, the one place
+  # they are declared.
+  eval "$(grep -E '^FLASH_LOCAL_(REPO|REV|IMAGE|GB|DRAFT_REPO|DRAFT_REV|DRAFT_GB)=' "$REPO_DIR/install-flash-local.sh" || true)"
+  for _v in FLASH_LOCAL_REPO FLASH_LOCAL_REV FLASH_LOCAL_IMAGE FLASH_LOCAL_GB \
+            FLASH_LOCAL_DRAFT_REPO FLASH_LOCAL_DRAFT_REV FLASH_LOCAL_DRAFT_GB; do
     eval "[ -n \"\${$_v:-}\" ]" || die "install-flash-local.sh no longer defines $_v (repo layout changed?)"
   done
   unset _v
-  docker image inspect "$FLASH_LOCAL_IMAGE" >/dev/null 2>&1 \
-    || die "the Flash FP4-Local lane's image (${FLASH_LOCAL_IMAGE:0:40}...) is missing: ./prepare-lane.sh flash-local pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+  FLL_VARIANT=mtp; [ "$CHOICE" = "flash-local-dflash2" ] && FLL_VARIANT=dflash2
+  # the image this target runs: the lane's own for both targets (the drafter's experiment settled
+  # its target on the pin MTP was measured on, install-flash-local.sh says how), so the fetch runs
+  # in it
+  FLL_IMAGE="$FLASH_LOCAL_IMAGE"
+  docker image inspect "$FLL_IMAGE" >/dev/null 2>&1 \
+    || die "the Flash FP4-Local lane's image (${FLL_IMAGE:0:40}...) is missing: ./prepare-lane.sh $CHOICE pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
   FLL_HF="$(unit_hf_cache "$FLASH_LOCAL_UNIT")"
   FLL_HF="${FLL_HF:-$HF_CACHE}"
-  # the room its table's copies need on their disk, before the download (install-flash-local.sh)
-  HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --room || exit 1
+  # the room its table's copies need on their disk (install-flash-local.sh; the checkpoint's and,
+  # on the dflash2 target, the drafter's come with their fetch)
+  HF_CACHE="$FLL_HF" FLASH_LOCAL_VARIANT="$FLL_VARIANT" bash "$REPO_DIR/install-flash-local.sh" --room || exit 1
   printf '\n\033[1;36m── Verifying %s @ %s in the cache (resumable)\033[0m\n' "$FLASH_LOCAL_REPO" "${FLASH_LOCAL_REV:0:12}"
   FLL_TOKEN_ARGS=()
   # by name: docker takes the value from its own environment, so the token is in no argv
@@ -509,7 +520,7 @@ if [ "$CHOICE" = "flash-local" ]; then
   if [ -f "$REPO_DIR/hf-progress.py" ]; then
     FLL_PROGRESS_ARGS=(-v "$REPO_DIR/hf-progress.py:/opt/qwen38/hf-progress.py:ro")
   fi
-  # In the lane's own image, as the other vLLM lanes fetch theirs; --init so that a cockpit job
+  # In the target's own image, as the other vLLM lanes fetch theirs; --init so that a cockpit job
   # stopped past its timeout stops this too. ckpt-fetch.py is the one fetch of every lane's
   # checkpoint (it says why).
   docker run --rm --init --network host --user "$(id -u):$(id -g)" --entrypoint python3 \
@@ -517,12 +528,30 @@ if [ "$CHOICE" = "flash-local" ]; then
     -e HF_HUB_DISABLE_PROGRESS_BARS="$DL_NO_BARS" \
     "${FLL_TOKEN_ARGS[@]}" "${FLL_PROGRESS_ARGS[@]}" \
     -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
-    -v "$FLL_HF":/hf "$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \
+    -v "$FLL_HF":/hf "$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \
     --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
     || die "the Flash FP4-Local checkpoint could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
-  fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}"
-  # its chat template, its n-gram table where the engine reads it, and its unit for this checkpoint
-  HF_CACHE="$FLL_HF" bash "$REPO_DIR/install-flash-local.sh" --stage "$FLL_STAGE" \
+  if [ "$FLL_VARIANT" = dflash2 ]; then
+    # its DFlash2 drafter at its pinned revision, in the cache the unit reads: the target loads it
+    # with the checkpoint, and the unit's check of its files guards it there
+    printf '\n\033[1;36m── Verifying its DFlash2 drafter %s @ %s in the cache (resumable)\033[0m\n' "$FLASH_LOCAL_DRAFT_REPO" "${FLASH_LOCAL_DRAFT_REV:0:12}"
+    docker run --rm --init --network host --user "$(id -u):$(id -g)" --entrypoint python3 \
+      -e HF_HOME=/hf -e HF_HUB_DOWNLOAD_TIMEOUT=30 -e HF_HUB_DISABLE_XET=1 \
+      -e HF_HUB_DISABLE_PROGRESS_BARS="$DL_NO_BARS" \
+      "${FLL_TOKEN_ARGS[@]}" "${FLL_PROGRESS_ARGS[@]}" \
+      -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
+      -v "$FLL_HF":/hf "$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_DRAFT_REPO" "$FLASH_LOCAL_DRAFT_REV" --offline-first \
+      --need-gb "$FLASH_LOCAL_DRAFT_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
+      || die "the Flash FP4-Local lane's DFlash2 drafter could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+  fi
+  if [ "$FLL_VARIANT" = dflash2 ]; then
+    fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}, with its DFlash2 drafter"
+  else
+    fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}"
+  fi
+  # its chat template, its n-gram table where the engine reads it, its capture plugin when the
+  # target is dflash2, and its unit for this checkpoint
+  HF_CACHE="$FLL_HF" FLASH_LOCAL_VARIANT="$FLL_VARIANT" bash "$REPO_DIR/install-flash-local.sh" --stage "$FLL_STAGE" \
     || { rm -f "$FLL_STAGE"; die "the Flash FP4-Local unit could not be prepared (the lines above say why)"; }
   FLL_REWRITTEN=""
   if ! cmp -s "$FLL_STAGE" "$FLASH_LOCAL_UNIT"; then
@@ -571,8 +600,8 @@ if [ "$CHOICE" = "flash-local" ]; then
     echo "opencode integration is off on this box (./install.sh --no-opencode): default model left alone"
   else
     FLL_OC_SUM="$({ cat "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json" 2>/dev/null || true; } | sha256sum)"
-    FLL_PAIR="$("$REPO_DIR/oc-limits.sh" flash-local)" || FLL_PAIR=""
-    FLL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-local 262144 || true)"
+    FLL_PAIR="$("$REPO_DIR/oc-limits.sh" "$CHOICE")" || FLL_PAIR=""
+    FLL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label "$CHOICE" 262144 || true)"
     FLL_PORT="$({ grep -m1 -oE 'PROXY_PORT=[0-9]+|keepalive-proxy.py [0-9]+' /etc/systemd/system/qwen38-keepalive.service 2>/dev/null || true; } | grep -oE '[0-9]+$' || true)"
     FLL_SRC="$(mktemp)"
     if [ -n "$FLL_PAIR" ] && python3 "$REPO_DIR/oc-flash-local.py" "http://127.0.0.1:${FLL_PORT:-30001}/v1" "$CONFIG_DIR/api-key" \
@@ -583,7 +612,7 @@ if [ "$CHOICE" = "flash-local" ]; then
       for OC_JSON in "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json"; do
         [ -f "$OC_JSON" ] || continue
         python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --add-providers "$FLL_SRC" >/dev/null || true
-        python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-local flash-local 262144 \
+        python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-local "$CHOICE" 262144 \
           || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
         [ -n "$FLL_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLL_KEEP" \
           || echo "NOTE: could not update the compaction block in $OC_JSON; check it by hand ($FLL_KEEP)"; }
@@ -602,7 +631,11 @@ if [ "$CHOICE" = "flash-local" ]; then
     fi
   fi
   echo "Clients reach it through the proxy on :30001 with the box's key, as model qwen3.8-flash-next-fp4."
-  echo "Switch back:      ./switch-model.sh flash   (or any other target)"
+  if [ "$CHOICE" = "flash-local" ]; then
+    echo "Switch back:      ./switch-model.sh flash   (or flash-local-dflash2, any other target)"
+  else
+    echo "Switch back:      ./switch-model.sh flash   (or flash-local, any other target)"
+  fi
   exit 0
 fi
 

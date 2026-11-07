@@ -484,15 +484,16 @@ jobs:
           # --with-image installs, `video`, installed by --with-video, `kolibri`
           # and `kolibri-nvfp4`, the Kolibri lane's two checkpoints (--with-kolibri),
           # `nemotron`, the Nemotron lane's (--with-nemotron), `nemotron-super`, the
-          # Nemotron Super lane's (--with-nemotron-super), `flash-local`, the Flash
-          # FP4-Local lane's (--with-flash-local), and `ornith-122b`, the Ornith lane's
-          # (--with-ornith-122b), each switched to like any other, and none a MODEL_CHOICE
+          # Nemotron Super lane's (--with-nemotron-super), `flash-local` and its second
+          # target `flash-local-dflash2`, the Flash FP4-Local lane's two (--with-flash-local),
+          # and `ornith-122b`, the Ornith lane's (--with-ornith-122b), each switched to
+          # like any other, and none a MODEL_CHOICE
           # (none has a recipe; Kolibri, the Nemotron lanes, Flash FP4-Local and Ornith
           # serve text, from vLLM, under their own installers). Both sets are asserted, so a
           # target added to the switcher and forgotten in the cockpit's enum is
           # still caught.
-          FLAG_LANES = ["image", "image-turbo", "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super", "flash-local",
-                        "ornith-122b"]
+          FLAG_LANES = ["image", "image-turbo", "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super",
+                        "flash-local", "flash-local-dflash2", "ornith-122b"]
           ref = choices
           switch_ref = sorted(ref + FLAG_LANES)
           text_lists = {"install.sh MODEL_CHOICE": choices, "recipes BUILTIN_IDS": sorted(builtins)}

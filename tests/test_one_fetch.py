@@ -46,8 +46,11 @@ CALLS = {
         ("switch-model.sh", '"$NEM_IMAGE" /opt/qwen38/ckpt-fetch.py "$NEM_R" "$NEM_V" --offline-first \\\n'
                             '      --need-gb "$NEM_ASK" --free-gb "$(dl_free_gb "$NEM_HF")"'),
     "switch-model.sh, the Flash FP4-Local lane":
-        ("switch-model.sh", '"$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \\\n'
+        ("switch-model.sh", '"$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \\\n'
                             '    --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")"'),
+    "switch-model.sh, the Flash FP4-Local lane's DFlash2 drafter":
+        ("switch-model.sh", '"$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_DRAFT_REPO" "$FLASH_LOCAL_DRAFT_REV" --offline-first \\\n'
+                            '      --need-gb "$FLASH_LOCAL_DRAFT_GB" --free-gb "$(dl_free_gb "$FLL_HF")"'),
     "switch-model.sh, the Ornith lane":
         ("switch-model.sh", '"$FLASH_LOCAL_IMAGE" /opt/qwen38/ckpt-fetch.py "$ORNITH_122B_REPO" "$ORNITH_122B_REV" --offline-first \\\n'
                             '    --need-gb "$ORNITH_122B_GB" --free-gb "$(dl_free_gb "$ORN_HF")"'),
@@ -65,7 +68,7 @@ class EveryLaneFetchesThroughIt(unittest.TestCase):
             with self.subTest(what):
                 self.assertEqual(text(script).count(call), 1, f"{script} no longer runs it this way")
         self.assertEqual(text("switch-model.sh").count("ckpt-fetch.py\" \"$") + text("switch-model.sh").count(
-            "/opt/qwen38/ckpt-fetch.py \"$"), 7, "switch-model.sh fetches for seven lanes, each through it")
+            "/opt/qwen38/ckpt-fetch.py \"$"), 8, "switch-model.sh fetches for seven lanes, each through it: the Flash FP4-Local lane's DFlash2 drafter beside its checkpoint")
 
     def test_no_script_keeps_a_fetch_of_its_own(self):
         for script in SCRIPTS:

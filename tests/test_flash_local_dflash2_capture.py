@@ -106,11 +106,30 @@ print("ok")
     TORCH is not None, "needs the reference class of machine (its torch)"
 )
 class HcMeanCapture(unittest.TestCase):
-    """The capture arithmetic the wrapped layers do, without CUDA: the
-    deferred hyper-connection combine materializes into a [tokens, hc*hidden]
+    """The capture the wrapped layers do, without CUDA and without vLLM
+    (flash_local_dflash2.capture needs torch alone): the deferred
+    hyper-connection combine materializes into a [tokens, hc*hidden]
     multi-stream state, the capture averages the streams, and copies the
     current tokens' rows into one fixed buffer slot, the way the model's own
-    MTP buffer is filled."""
+    MTP buffer is filled. The wrapper hands the triple on unchanged and
+    answers for the layer it wraps."""
+
+    @classmethod
+    def setUpClass(cls):
+        # imported from the repo's folder, which is what the lane copies: no bytecode written
+        # into it by the test
+        cls.bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, str(PLUGIN))
+        import flash_local_dflash2.capture as capture
+        cls.capture = capture
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.dont_write_bytecode = cls.bytecode
+        sys.path.remove(str(PLUGIN))
+        sys.modules.pop("flash_local_dflash2.capture", None)
+        sys.modules.pop("flash_local_dflash2", None)
 
     def test_stream_mean_into_a_fixed_buffer(self):
         t = TORCH
@@ -118,7 +137,11 @@ class HcMeanCapture(unittest.TestCase):
         combined = t.arange(
             tokens * hc * hidden, dtype=t.float32
         ).view(tokens, hc * hidden)
-        aux = combined.unflatten(-1, (hc, hidden)).mean(dim=-2)
+        buffer = t.full((2, max_tokens, hidden), float("nan"))
+        slot = 1
+        view_before = buffer[slot, :tokens].data_ptr()
+        self.capture.capture_hc_mean(combined, buffer, slot, hc, hidden)
+        aux = buffer[slot, :tokens]
         self.assertEqual(tuple(aux.shape), (tokens, hidden))
         # hand check: feature j of token i averages stream s at s*hidden + j
         for i in range(tokens):
@@ -130,14 +153,82 @@ class HcMeanCapture(unittest.TestCase):
         # the fixed-buffer discipline: only the current tokens' rows are
         # written, into storage that keeps its address, so a CUDA graph
         # replayed at the same shape overwrites the same bytes
-        buffer = t.full((2, max_tokens, hidden), float("nan"))
-        slot = 1
-        view = buffer[slot, :tokens]
-        view.copy_(aux)
-        self.assertTrue(t.equal(buffer[slot, :tokens], aux))
         self.assertTrue(t.isnan(buffer[slot, tokens:]).all())
         self.assertTrue(t.isnan(buffer[0]).all())
-        self.assertEqual(view.data_ptr(), buffer[slot, :tokens].data_ptr())
+        self.assertEqual(buffer[slot, :tokens].data_ptr(), view_before)
+        # a width that is not hc streams of hidden, or more rows than the
+        # buffer holds, is a wrong capture, refused rather than reshaped
+        with self.assertRaises(AssertionError):
+            self.capture.capture_hc_mean(combined[:, :-1], buffer, slot, hc, hidden)
+        with self.assertRaises(AssertionError):
+            self.capture.capture_hc_mean(
+                combined.repeat(max_tokens, 1), buffer, slot, hc, hidden
+            )
+
+    def test_the_wrapper_hands_the_triple_on_and_answers_for_its_layer(self):
+        t = TORCH
+        hc, hidden, tokens, max_tokens = 4, 8, 3, 16
+        calls = []
+
+        class Combine:
+            # the image's GatedResidual.combine: a pure function of the triple
+            def combine(self, hidden_states, block_output, injection):
+                calls.append((hidden_states, block_output, injection))
+                return hidden_states + block_output.repeat(1, hc) * injection[:, :1]
+
+        class Layer(t.nn.Module):
+            layer_type = "linear_attention"
+            layer_idx = 5
+
+            def __init__(self):
+                super().__init__()
+                self.mlp_hyper_connection = Combine()
+                self.linear_attn = t.nn.Identity()
+
+            def forward(self, hidden_states, prev_block_output, prev_injection,
+                        positions, *, input_ids, query_start_loc, ngram_context,
+                        output_indices=None):
+                self.seen = dict(prev_block_output=prev_block_output,
+                                 prev_injection=prev_injection, positions=positions,
+                                 input_ids=input_ids, query_start_loc=query_start_loc,
+                                 ngram_context=ngram_context, output_indices=output_indices)
+                return hidden_states * 2, t.ones(tokens, hidden), t.full((tokens, hc), 0.5)
+
+        layer = Layer()
+        buffer = t.full((5, max_tokens, hidden), float("nan"))
+        wrapped = self.capture.DFlashCaptureLayer(layer, buffer, 2, hc, hidden)
+        # the decoder layer's own attributes, read through the wrapper
+        self.assertEqual(wrapped.layer_type, "linear_attention")
+        self.assertEqual(wrapped.layer_idx, 5)
+        self.assertIs(wrapped.linear_attn, layer.linear_attn)
+        self.assertIs(wrapped.mlp_hyper_connection, layer.mlp_hyper_connection)
+        self.assertIs(wrapped.layer, layer)
+        with self.assertRaises(AttributeError):
+            wrapped.no_such_attribute
+        # the wrapped layer stays in the module walk, under the wrapper
+        self.assertIn(layer, list(wrapped.modules()))
+        x = t.arange(tokens * hc * hidden, dtype=t.float32).view(tokens, hc * hidden)
+        positions = t.arange(tokens)
+        out = wrapped(x, None, None, positions, input_ids=positions,
+                      query_start_loc=None, ngram_context=None)
+        self.assertEqual(layer.seen["positions"].data_ptr(), positions.data_ptr())
+        self.assertIsNone(layer.seen["prev_block_output"])
+        # the triple goes on as the layer returned it: the next layer does its
+        # own combine, the capture's is an extra, pure one
+        self.assertEqual(len(out), 3)
+        self.assertTrue(t.equal(out[0], x * 2))
+        self.assertTrue(t.equal(out[1], t.ones(tokens, hidden)))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(t.equal(calls[0][0], out[0]))
+        self.assertIs(calls[0][1], out[1])
+        self.assertIs(calls[0][2], out[2])
+        # and its mean of the four streams sits in the wrapper's slot alone
+        combined = layer.mlp_hyper_connection.combine(*out)
+        want = combined.view(tokens, hc, hidden).mean(dim=1)
+        self.assertTrue(t.equal(buffer[2, :tokens], want))
+        self.assertTrue(t.isnan(buffer[2, tokens:]).all())
+        for slot in (0, 1, 3, 4):
+            self.assertTrue(t.isnan(buffer[slot]).all())
 
 
 if __name__ == "__main__":

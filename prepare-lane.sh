@@ -12,7 +12,8 @@
 # draft, its config set for the window the unit serves. Each download is refused before its
 # first byte when its room is not there.
 #
-#   ./prepare-lane.sh image|video|kolibri|nemotron|nemotron-super|flash-local|ornith-122b
+#   ./prepare-lane.sh image|video|kolibri|nemotron|nemotron-super|ornith-122b
+#   ./prepare-lane.sh flash-local|flash-local-dflash2  # the Flash FP4-Local lane's image, for its target
 #   ./prepare-lane.sh flash|27b [<target>]
 #
 # The target is the one the Load loads, for the two lanes whose preparation fetches a
@@ -27,15 +28,19 @@ set -euo pipefail
 # exact-argv sudoers is rendered from it and has to match the cockpit's own calls (2026-10-22).
 while [ -n "${HOME:-}" ] && [ "$HOME" != / ] && [ "${HOME%/}" != "$HOME" ]; do HOME="${HOME%/}"; done; export HOME
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-usage(){ echo "usage: ./prepare-lane.sh <image|video|kolibri|nemotron|nemotron-super|flash-local|ornith-122b> | <flash|27b> [<target>]" >&2; exit 2; }
+usage(){ echo "usage: ./prepare-lane.sh <image|video|kolibri|nemotron|nemotron-super|flash-local|flash-local-dflash2|ornith-122b> | <flash|27b> [<target>]" >&2; exit 2; }
 die(){ printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 section(){ printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 case "${1:-}" in
-  image|video|kolibri|nemotron|nemotron-super|flash-local|ornith-122b) [ "$#" -eq 1 ] || usage ;;
+  image|video|kolibri|nemotron|nemotron-super|flash-local|flash-local-dflash2|ornith-122b) [ "$#" -eq 1 ] || usage ;;
   flash|27b) [ "$#" -le 2 ] || usage ;;
   *) usage ;;
 esac
 TARGET="${2:-}"
+# the one-argument form spells the lane's target, not the lane: both targets of the Flash
+# FP4-Local lane run its own image (install-flash-local.sh says how the target is served),
+# so the preparation is the lane's, whatever target the Load loads
+[ "$1" = flash-local-dflash2 ] && set -- flash-local
 
 # What a launcher or unit says. head -1 each time: -m1 stops at the first line, and -o prints
 # every match on it (the flash lane's draft vocabulary line names its file twice).
@@ -180,7 +185,8 @@ prepare_27b(){
 
 case "$1" in
   image|video|kolibri|nemotron|nemotron-super|flash-local|ornith-122b)
-    # its checkpoint comes with its switch, as for any Load: no target here
+    # its checkpoint comes with its switch, as for any Load: no target here (the Flash
+    # FP4-Local lane's second target names the lane, the alias above)
     CONFIG_DIR="$HOME/.config/qwen38"; REPO_DIR="$HERE"
     # shellcheck source=lanes.sh
     . "$HERE/lanes.sh"

@@ -37,7 +37,8 @@ TARGETS = {"stock": "27b", "uncensored": "27b", "fp8": "27b", "uncensored-fp8": 
            "flash": "flash", "flash-nvda": "flash", "flash-uncensored": "flash",
            "image": "image", "image-turbo": "image", "video": "video",
            "kolibri": "kolibri", "kolibri-nvfp4": "kolibri", "nemotron": "nemotron",
-           "nemotron-super": "nemotron-super", "flash-local": "flash-local", "ornith-122b": "ornith-122b"}
+           "nemotron-super": "nemotron-super", "flash-local": "flash-local",
+           "flash-local-dflash2": "flash-local", "ornith-122b": "ornith-122b"}
 # Targets of a lane that fits, which a 64 GB box still does not take: Qwen's FP8 weights of the 27B
 # (30.9 GB against 22.0 GB for NVFP4) leave its KV pool too little, and no 64 GB run measured them.
 HEAVY_64 = ("fp8", "uncensored-fp8")

@@ -38,6 +38,10 @@ PIN_MODELS = {
     "NEMOTRON_SUPER_REV": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4",
     "NEMOTRON_SUPER_DRAFT_REV": "nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4-LiLiCorr",
     "FLASH_LOCAL_REV": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
+    # the Flash FP4-Local lane's second target (flash-local-dflash2) loads this DFlash2 drafter
+    # with the checkpoint: named, so its revision reads pinned in the Models view and never gets
+    # offered to a stray deletion
+    "FLASH_LOCAL_DRAFT_REV": "incoai/Qwen3.8-Flash-Next-DFlash2",
     "ORNITH_122B_REV": "ornith-ai/Ornith-1.5-122B-NVFP4",
 }
 

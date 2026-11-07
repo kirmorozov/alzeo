@@ -79,21 +79,22 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   --security-opt seccomp=__HOME__/.config/qwen38/seccomp-io-uring.json \
   -e HF_HUB_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \
   -e PYTHONDONTWRITEBYTECODE=1 -e HF_MODULES_CACHE=/tmp/hf-modules \
-  -e PYTHONPATH=/opt/qwen38-auth -e QWEN38_KEY_FILE=/out/api-key \
+  -e PYTHONPATH=__PYTHONPATH__ -e QWEN38_KEY_FILE=/out/api-key \
   -e VLLM_PLE_TABLE_MEMORY=disk -e B12X_DISK_BACKEND=io_uring \
   -e CUTE_DSL_ARCH=sm_121a -e SAFETENSORS_FAST_GPU=1 \
   -e VLLM_WORKER_MULTIPROC_METHOD=spawn -e VLLM_SSM_CONV_STATE_LAYOUT=DS \
   -e VLLM_USE_AOT_COMPILE=1 -e VLLM_USE_MEGA_AOT_ARTIFACT=1 \
   -e VLLM_USE_V2_MODEL_RUNNER=1 -e B12X_POLICY_MODE=auto \
-  -e VLLM_MXFP8_LM_HEAD=1 -e VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE=w13 \
+  __LM_HEAD_LINE__-e VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE=w13 \
   -e VLLM_B12X_MOE_FP4_FORCE_A16=1 -e B12X_W4A16_A4_PREFILL=1 \
   -e PYTORCH_CUDA_ALLOC_CONF=per_process_memory_fraction:0.95,garbage_collection_threshold:0.8 \
-  -v __HOME__/.config/qwen38/flash-local-cache/vllm:/root/.cache/vllm \
-  -v __HOME__/.config/qwen38/flash-local-cache/flashinfer:/root/.cache/flashinfer \
-  -v __HOME__/.config/qwen38/flash-local-cache/b12x:/root/.cache/b12x \
-  -v __HOME__/.config/qwen38/flash-local-cache/triton:/root/.triton \
+  -v __CACHE_DIR__/vllm:/root/.cache/vllm \
+  -v __CACHE_DIR__/flashinfer:/root/.cache/flashinfer \
+  -v __CACHE_DIR__/b12x:/root/.cache/b12x \
+  -v __CACHE_DIR__/triton:/root/.triton \
   -v __HF_CACHE__:/root/.cache/huggingface \
   __TABLE_MOUNTS__ \
+  __PLUGIN_MOUNT__ \
   --mount type=bind,source=__HOME__/.config/qwen38/api-key,target=/out/api-key,readonly \
   --mount type=bind,source=__HOME__/.config/qwen38/chat-template-flash-local.jinja,target=/out/chat-template-flash-local.jinja,readonly \
   -v __HOME__/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \
@@ -105,7 +106,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
     --mamba-cache-mode align --enable-prefix-caching --enable-chunked-prefill \
     --max-model-len 262144 --max-num-seqs __SEQS__ --max-num-batched-tokens 4096 \
     --gpu-memory-utilization __GMU__ \
-    --speculative-config.method mtp --speculative-config.num_speculative_tokens 4 \
+    __SPEC_CONFIG__ \
     --gdn-decode-kernel b12x --linear-backend b12x --moe-backend b12x \
     --no-enable-flashinfer-autotune --mm-encoder-tp-mode data \
     --compilation-config.pass_config.fuse_act_quant true \

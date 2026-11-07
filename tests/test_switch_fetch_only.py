@@ -185,6 +185,25 @@ class FetchOnly(unittest.TestCase):
         self.assertEqual(box.flocal_unit.read_bytes(), unit_before)
         self.assertFalse([c for c in calls if re.search(r"\b(enable|disable|daemon-reload|restart|start|stop)\b", c)], calls)
 
+    def test_the_flash_local_dflash2_target_fetches_its_drafter_before_it_stops(self):
+        # the target loads the drafter with the checkpoint, as the Nemotron lanes load theirs:
+        # both are fetched before the --fetch stop, in the target's own image
+        box = Box()
+        unit_before = box.flocal_unit.read_bytes()
+        rc, out, runs, calls = box.run("flash-local-dflash2", "--fetch")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("with its DFlash2 drafter is in the cache; nothing else was changed", out)
+        pins = box.flocal_pins
+        self.assertEqual(len(runs), 2, runs)
+        self.assertIn(f"/opt/qwen38/ckpt-fetch.py {pins['FLASH_LOCAL_REPO']} {pins['FLASH_LOCAL_REV']} ", runs[0])
+        self.assertIn(f"/opt/qwen38/ckpt-fetch.py {pins['FLASH_LOCAL_DRAFT_REPO']} {pins['FLASH_LOCAL_DRAFT_REV']} ", runs[1])
+        self.assertIn(f"--need-gb {pins['FLASH_LOCAL_GB']} ", runs[0])
+        self.assertIn(f"--need-gb {pins['FLASH_LOCAL_DRAFT_GB']} ", runs[1])
+        for run in runs:
+            self.assertIn(f" {pins['FLASH_LOCAL_IMAGE']} ", run, "in the image the lane runs, pulled by digest")
+        self.assertEqual(box.flocal_unit.read_bytes(), unit_before)
+        self.assertFalse([c for c in calls if re.search(r"\b(enable|disable|daemon-reload|restart|start|stop)\b", c)], calls)
+
     def test_the_ornith_lane_fetches_in_the_shared_image_and_stops(self):
         box = Box()
         unit_before = box.ornith_unit.read_bytes()
@@ -213,14 +232,27 @@ class FetchOnly(unittest.TestCase):
     def test_every_lane_stops_right_after_its_own_download(self):
         # the seven branches that fetch (Kolibri, Nemotron, Flash FP4-Local, Ornith, image, video, the text lanes): each
         # one's fetch command is followed at once by the --fetch stop, before anything it writes;
-        # the Nemotron lane's loop over its model and its drafter ends first, with nothing else in it
+        # the Nemotron lane's loop over its model and its drafter ends first, with nothing else in it,
+        # and the Flash FP4-Local lane's conditional DFlash2 drafter fetch, its lines named here one
+        # by one, is the only thing that may sit between the checkpoint's download and the stop
         calls = [m.start() for m in re.finditer(r"ckpt-fetch\.py\"? \"\$", SWITCH)]
-        self.assertEqual(len(calls), 7)
+        self.assertEqual(len(calls), 8)
         for at in calls:
             rest = SWITCH[at:]
             die = rest.index("|| die ")
             after = rest[rest.index("\n", die) + 1:].splitlines()
-            while after and re.fullmatch(r"\s*(NEM_ASK=1|done|#.*)", after[0]):
+            while after and re.fullmatch(
+                    r"\s*(NEM_ASK=1|done|fi$|else$|if \[ \"\$FLL_VARIANT\" = dflash2 \]; then$"
+                    r"|# its DFlash2 drafter.*|# with the checkpoint.*"
+                    r"|printf '[^']*DFlash2 drafter[^']*'.*"
+                    r"|docker run --rm --init --network host --user \"\$\(id -u\).*"
+                    r"|-e HF_HOME=.*|-e HF_HUB_DISABLE_PROGRESS_BARS=.*"
+                    r"|\"\$\{FLL_TOKEN_ARGS\[@\]\}\" \"\$\{FLL_PROGRESS_ARGS\[@\]\}\".*"
+                    r"|-v \"\$REPO_DIR/ckpt-fetch\.py:/opt/qwen38/ckpt-fetch\.py:ro\".*"
+                    r"|-v \"\$FLL_HF\":/hf \"\$FLL_IMAGE\".*"
+                    r"|--need-gb \"\$FLASH_LOCAL_DRAFT_GB\".*"
+                    r"|\|\| die \"the Flash FP4-Local lane's DFlash2 drafter.*"
+                    r"|#.*)", after[0]):
                 after.pop(0)
             self.assertTrue(after[0].lstrip().startswith("fetched "), after[:3])
 

@@ -1149,16 +1149,26 @@ def nemotron_engine_info(models: list | None = None):
     version = (http_json(ENGINE_BASE + "/version", timeout=5) or {}).get("version")
     root = models[0].get("root") or ""
     target = NEMOTRON_LANES[unit][1] if unit and root else None
+    speculative = B12X_SPEC.get(unit)
+    draft_tokens_re = r"--speculative-config\.num_speculative_tokens (\d+)"
+    if unit == FLASH_LOCAL_UNIT and target:
+        # the lane's second target names its DFlash2 drafter in the unit's speculative config,
+        # in the same dotted flags the first gives the card's MTP head: the target's name and
+        # its drafter's method read off the unit, the draft length off the one flag both use
+        ft = unit_target(unit).get("target")
+        if ft == "flash-local-dflash2":
+            target, speculative = ft, "DFlash2"
+        elif ft:
+            target = ft
     slim = {"model_path": models[0].get("root"), "served_model_name": models[0].get("id"),
             "context_length": models[0].get("max_model_len"),
             "max_total_num_tokens": facts["pool"] or None,
             "kv_cache_dtype": labels.get("cache_dtype"),
             "mem_fraction_static": float(labels["gpu_memory_utilization"]) if labels.get("gpu_memory_utilization") else None,
             "quantization": NEMOTRON_LANES[unit][3] if target else None,
-            "speculative_algorithm": B12X_SPEC.get(unit) if target else None,
+            "speculative_algorithm": speculative if target else None,
             # its draft length, from the unit that started it (the engine does not publish it)
-            "speculative_num_draft_tokens": _unit_int(nemotron_unit_path(unit),
-                                                      r"--speculative-config\.num_speculative_tokens (\d+)") if target else None,
+            "speculative_num_draft_tokens": _unit_int(nemotron_unit_path(unit), draft_tokens_re) if target else None,
             "version": f"vLLM {version}" if version else None}
     # the one-prompt ceiling the proxy applies to it, read as for the SGLang lanes: the Flash
     # FP4-Local lane gets the flash lane's (proxy v6.43), and 0 read there instead said that no
@@ -2021,6 +2031,14 @@ def stale_engines() -> dict:
         if unit == "qwen38-keepalive.service" or not path.is_file():
             continue
         extra = [str(CONFIG_DIR / f) for f in VLLM_LANE_FILES] if unit in VLLM_UNITS else []
+        # The Flash FP4-Local lane's DFlash2 capture plugin, which its unit mounts read-only at
+        # /opt/df2-plugin and puts on the engine's PYTHONPATH when it serves the lane's
+        # flash-local-dflash2 target: the engine reads it at its start, so a change of any file
+        # of its copy owes a restart, counted the way the lane's key middleware is (no copy where
+        # the target has not been installed, and nothing to count then).
+        if unit == "qwen38-flash-local.service":
+            plugin = CONFIG_DIR / "flash-local-dflash2"
+            extra += sorted(str(f) for f in plugin.rglob("*") if f.is_file() and "__pycache__" not in f.parts)
         try:
             reason = _owed_reason(unit, ei.running(str(path), str(CONFIG_DIR), hf, [],
                                                    extra=extra, timeout=ENGINE_INPUTS_TIMEOUT_S))
@@ -2220,6 +2238,17 @@ def unit_target(unit: str) -> dict:
         m = re.search(r"(\S+) --revision [0-9a-f]{40}", text)
         model = m.group(1) if m else None
         target = ("kolibri-nvfp4" if model and "NVFP4" in model.upper() else "kolibri") if model else None
+        return {"model": model, "target": target}
+    if unit == FLASH_LOCAL_UNIT:
+        # two targets of one lane: the flash-local-dflash2 one names the DFlash2 drafter in its
+        # speculative config, the checkpoint in its vllm serve line, as the other b12x lanes
+        try:
+            text = FLASH_LOCAL_UNIT_PATH.read_text(errors="replace")
+        except OSError:
+            return {"model": None, "target": None}
+        m = re.search(r"vllm serve (\S+) --revision [0-9a-f]{40}", text)
+        model = m.group(1) if m else None
+        target = ("flash-local-dflash2" if "DFlash2" in text else "flash-local") if model else None
         return {"model": model, "target": target}
     if unit in NEMOTRON_LANES:
         # one checkpoint for each lane, named in its unit as <repo> --revision <sha>
@@ -3154,7 +3183,8 @@ ACTIONS = {
     "switch": {
         "danger": "medium",
         "params": {"target": ["stock", "uncensored", "fp8", "uncensored-fp8",
-                              "flash", "flash-nvda", "flash-uncensored", "flash-local", "image", "image-turbo",
+                              "flash", "flash-nvda", "flash-uncensored", "flash-local", "flash-local-dflash2",
+                              "image", "image-turbo",
                               "video", "kolibri", "kolibri-nvfp4", "nemotron", "nemotron-super", "ornith-122b"]},
         "argv": lambda p: ["bash", str(REPO_DIR / "switch-model.sh"), p["target"]],
         # A switch can download a whole checkpoint: 124 GB for flash take about 23 min at
@@ -3241,6 +3271,8 @@ def target_lane(target: str) -> str:
     if target.startswith("nemotron"):
         return "nemotron"
     # a lane of its own, before the flash lane's prefix takes it for one of its targets
+    if target == "flash-local-dflash2":
+        return "flash-local"
     if target == "flash-local":
         return "flash-local"
     if target == "ornith-122b":
@@ -3269,12 +3301,15 @@ TARGET_PIN = {"stock": "STOCK_REV", "uncensored": "UNC_REV", "fp8": "FP8_REV", "
               "image": "IMAGE_MODEL_PIN_REV", "image-turbo": "IMAGE_TURBO_PIN_REV",
               "video": "VIDEO_MODEL_PIN_REV", "kolibri": "KOLIBRI_FP8_REV", "kolibri-nvfp4": "KOLIBRI_NVFP4_REV",
               "nemotron": "NEMOTRON_BOLT_REV", "nemotron-super": "NEMOTRON_SUPER_REV",
-              "flash-local": "FLASH_LOCAL_REV", "ornith-122b": "ORNITH_122B_REV"}
+              "flash-local": "FLASH_LOCAL_REV", "flash-local-dflash2": "FLASH_LOCAL_REV", "ornith-122b": "ORNITH_122B_REV"}
 # The Nemotron lanes load a drafter with the checkpoint, and their Download (the switch's --fetch)
 # fetches both: Library's state of such a target counts its drafter too. Bolt's read whole with its
 # drafter missing, which its Load then fetched (found on the reference box, 2026-10-15). The 27B's
-# DFlash2 draft belongs to its lane's preparation instead (lane_prepared), not to a target.
-TARGET_DRAFT_PIN = {"nemotron": "NEMOTRON_BOLT_DRAFT_REV", "nemotron-super": "NEMOTRON_SUPER_DRAFT_REV"}
+# DFlash2 draft belongs to its lane's preparation instead (lane_prepared), not to a target. The
+# Flash FP4-Local lane's second target, flash-local-dflash2, loads its DFlash2 drafter the same
+# way: its state is whole with its drafter whole, begun with either begun, absent with none.
+TARGET_DRAFT_PIN = {"nemotron": "NEMOTRON_BOLT_DRAFT_REV", "nemotron-super": "NEMOTRON_SUPER_DRAFT_REV",
+                    "flash-local-dflash2": "FLASH_LOCAL_DRAFT_REV"}
 
 
 def target_unit(target: str) -> Path:
@@ -3289,7 +3324,7 @@ def target_unit(target: str) -> Path:
         return NEMOTRON_SUPER_UNIT_PATH
     if target.startswith("nemotron"):
         return NEMOTRON_UNIT_PATH
-    if target == "flash-local":
+    if target in ("flash-local", "flash-local-dflash2"):
         return FLASH_LOCAL_UNIT_PATH
     if target == "ornith-122b":
         return ORNITH_UNIT_PATH

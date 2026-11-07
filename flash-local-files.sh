@@ -3,14 +3,19 @@
 # before it runs, and its unit asks this before the engine, as its main process (the head of its
 # ExecStart, after the memory guard every lane runs).
 #
-# The checkpoint at its pinned revision, and the copies of its n-gram table the unit mounts. A start
+# The checkpoint at its pinned revision, the copies of its n-gram table the unit mounts, and, when
+# the unit serves with the dflash2 drafter, the drafter's snapshot at its pinned revision, its
+# config and its one weights file, non-empty, and the capture plugin's files, every one the repo's
+# folder has, in the copy the unit mounts read-only at /opt/df2-plugin. A start
 # without them made runc create what was missing, owned by root: the checkpoint's folders inside the
 # Hugging Face cache, which install.sh then read as a lane begun, and a folder in place of a missing
 # copy (found in review, proved on the reference box, 2026-10-20). The checkpoint is its index and
 # every file the index names: a fetch cut short leaves the small index before the large files, and
 # the engine then died at every start, which systemd started again every 15 s (found in review,
 # 2026-10-20). A copy has its original's size in the cache: an empty one, or one cut short, is no
-# copy, and a folder left in a copy's place is none either. A cache on a disk mounted late at boot
+# copy, and a folder left in a copy's place is none either. The files the dflash2 unit asks for have
+# ordinary names, and are whole when they are there and non-empty: a fetch cut short links none of
+# them, and a folder left in one's place is no file. A cache on a disk mounted late at boot
 # gets 90 s to come, counted in tries rather than read off the clock, which can jump at boot.
 # Without them this says what is missing and what brings it back, the disk first (a Load with it
 # away fetches the checkpoint onto the system's disk), on a line the cockpit reads ("preflight:
@@ -51,9 +56,16 @@ for shard in shards:
 EOF
         ;;
       *)
-        orig="$blobs/${f##*/}"
-        if [ -n "$blobs" ] && { [ ! -f "$orig" ] || [ "$(stat -c %s "$f")" != "$(stat -L -c %s "$orig")" ]; }; then
-          echo "$f"; return
+        # The names of 64 hex are the copies, the checkpoint's files by their sha256: only they are
+        # held to their original's size in the checkpoint's blobs. The files the dflash2 unit asks
+        # for, the drafter's snapshot and the plugin's, have ordinary names and are whole by the
+        # non-empty check above: compared against the checkpoint's blobs, the drafter's config.json
+        # would read missing there, which it is
+        if [[ "${f##*/}" =~ ^[0-9a-f]{64}$ ]]; then
+          orig="$blobs/${f##*/}"
+          if [ -n "$blobs" ] && { [ ! -f "$orig" ] || [ "$(stat -c %s "$f")" != "$(stat -L -c %s "$orig")" ]; }; then
+            echo "$f"; return
+          fi
         fi
         ;;
     esac
@@ -66,7 +78,18 @@ for ((t = 0; t <= tries; t++)); do
   [ -z "$missing" ] && exit 0
   [ "$t" -lt "$tries" ] && sleep 3
 done
-echo "preflight: qwen38-flash-local.service lacks its files: $missing is missing or not whole (its" \
-     "checkpoint, or a copy of its n-gram table), or the disk that holds the Hugging Face cache is not" \
-     "mounted. With that disk mounted, Load the lane from the cockpit, or run ./switch-model.sh flash-local" >&2
+# The what the line names, of what the lane reads: today's pair, and the drafter's snapshot and the
+# capture plugin too when this run was asked for them, by the paths the unit gives them: the mtp
+# unit asks for neither, and its line stays today's, byte for byte (the drafter's snapshot is in
+# the same cache the checkpoint is in, the plugin in the config directory the unit mounts it from)
+what="its checkpoint, or a copy of its n-gram table"
+for f in "$@"; do
+  case "$f" in
+    */models--incoai--Qwen3.8-Flash-Next-DFlash2/*|*/flash-local-dflash2/*)
+      what="its checkpoint, a copy of its n-gram table, its DFlash2 drafter's snapshot, or its capture plugin" ;;
+  esac
+done
+echo "preflight: qwen38-flash-local.service lacks its files: $missing is missing or not whole ($what), or the" \
+     "disk that holds the Hugging Face cache is not mounted. With that disk mounted, Load the lane from" \
+     "the cockpit, or run ./switch-model.sh flash-local" >&2
 exit 78
