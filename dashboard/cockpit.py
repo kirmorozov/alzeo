@@ -2248,7 +2248,8 @@ def unit_target(unit: str) -> dict:
             return {"model": None, "target": None}
         m = re.search(r"vllm serve (\S+) --revision [0-9a-f]{40}", text)
         model = m.group(1) if m else None
-        target = ("flash-local-dflash2" if "DFlash2" in text else "flash-local") if model else None
+        dflash = re.search(r"--speculative-config\.method dflash\b", text)
+        target = ("flash-local-dflash2" if dflash else "flash-local") if model else None
         return {"model": model, "target": target}
     if unit in NEMOTRON_LANES:
         # one checkpoint for each lane, named in its unit as <repo> --revision <sha>

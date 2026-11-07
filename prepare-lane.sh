@@ -39,8 +39,9 @@ esac
 TARGET="${2:-}"
 # the one-argument form spells the lane's target, not the lane: both targets of the Flash
 # FP4-Local lane run its own image (install-flash-local.sh says how the target is served),
-# so the preparation is the lane's, whatever target the Load loads
-[ "$1" = flash-local-dflash2 ] && set -- flash-local
+# so the preparation is the lane's, with the target told to the installer, whose room for
+# the pair counts the drafter's download too
+if [ "$1" = flash-local-dflash2 ]; then export FLASH_LOCAL_VARIANT=dflash2; set -- flash-local; fi
 
 # What a launcher or unit says. head -1 each time: -m1 stops at the first line, and -o prints
 # every match on it (the flash lane's draft vocabulary line names its file twice).

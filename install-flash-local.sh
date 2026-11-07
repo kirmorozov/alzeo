@@ -168,9 +168,12 @@ if [ "$ACTION" = uninstall ]; then
   pin_untag flash-local
   rm -f "$CONFIG_DIR/chat-template-flash-local.jinja" "$CONFIG_DIR/flash-local-ple-dir" "$CONFIG_DIR/flash-local-files.sh"
   # The dflash2 drafter's own half of the lane, beside the mtp caches the shared step took: its
-  # caches and the capture plugin's copy, the latter taken whole: nothing but the lane's own
-  # files lives in it (the plugin is the repo's folder, copied here by the install and the switch)
-  rm -rf "$CONFIG_DIR/flash-local-cache-dflash2" "$CONFIG_DIR/flash-local-dflash2"
+  # caches, written as root inside the container like the mtp target's (what the user cannot
+  # remove, sudo does, as vllm-lane.sh removes those), and the capture plugin's copy, the user's
+  # own, taken whole: nothing but the lane's files lives in it (the plugin is the repo's folder,
+  # copied here by the install and the switch)
+  rm -rf "$CONFIG_DIR/flash-local-cache-dflash2" 2>/dev/null || sudo rm -rf --one-file-system "$CONFIG_DIR/flash-local-cache-dflash2"
+  rm -rf "$CONFIG_DIR/flash-local-dflash2"
   # The seccomp profile is the Ornith lane's too: it stays while that lane's unit reads it.
   if [ -f "$LANES_UNIT_DIR/qwen38-ornith-122b.service" ]; then
     echo "seccomp-io-uring.json kept: the Ornith 1.5 122B lane reads it too"
@@ -242,7 +245,7 @@ lane_table(){  # $1 copy: make the copies whole first; mounts: only name the cop
 
 # The DFlash2 capture plugin's files, relative to the repo's folder, as the repo has them (no
 # bytecode): what the unit's check and the restart note name, file for file, in the lane's copy.
-plugin_files(){  # the plugin's files, relative to its folder, as the repo has them: no bytecode
+plugin_files(){
   (cd "$HERE/flash-local-dflash2" && find . -type f -not -path '*/__pycache__/*' | sed 's|^\./||' | sort)
 }
 
@@ -342,7 +345,7 @@ lane_plugin(){
 
 # The unit, rendered for this box: written to $1. Its start checks what the engine reads before it runs: the
 # checkpoint's index at the pinned revision, each copy of the table its mounts name, and, with the
-# dflash2 drafter, the drafter's snapshot and the plugin's file its mount names. The table's
+# dflash2 drafter, the drafter's snapshot and every file of the plugin's copy. The table's
 # line of the check carries the extras (DRAFT_FILES), so that the mtp unit keeps its own, byte
 # for byte: no space there is ever dropped or doubled.
 render_unit(){

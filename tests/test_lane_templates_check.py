@@ -22,9 +22,14 @@ class TheLanesItKnows(unittest.TestCase):
     def test_every_text_lane_with_how_its_installer_serves_its_template(self):
         specs = {name: env for name, _, _, env in ltc.lane_specs()}
         self.assertEqual(sorted(specs), sorted(["stock", "uncensored", "fp8", "uncensored-fp8", "flash", "flash-nvda",
-                                                "flash-uncensored", "flash-local", "ornith-122b", "kolibri",
-                                                "kolibri-nvfp4", "nemotron", "nemotron-super"]))
+                                                "flash-uncensored", "flash-local", "flash-local-dflash2",
+                                                "ornith-122b", "kolibri", "kolibri-nvfp4", "nemotron",
+                                                "nemotron-super"]))
         self.assertEqual(specs["ornith-122b"], {"patches": "system-reminder,tool-reference"})
+        # the Flash FP4-Local lane's two targets serve one checkpoint, one template, patched the same
+        self.assertEqual(specs["flash-local-dflash2"], specs["flash-local"])
+        repos = {name: (repo, rev) for name, repo, rev, _ in ltc.lane_specs()}
+        self.assertEqual(repos["flash-local-dflash2"], repos["flash-local"])
         self.assertEqual(specs["stock"], {})
         self.assertIsNone(specs["kolibri"])
 

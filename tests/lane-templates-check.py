@@ -44,6 +44,8 @@ SHAPES = REPO / "tests" / "fixtures" / "client-shapes.json"
 # the NVFP4's while the FP8 is the lane's default (found in review, 2026-10-24).
 VLLM_LANES = {
     "flash-local": ("install-flash-local.sh", "FLASH_LOCAL", {"LEAN_DEFAULT": "0"}),
+    # the lane's second target serves the same checkpoint, so the same template, patched the same
+    "flash-local-dflash2": ("install-flash-local.sh", "FLASH_LOCAL", {"LEAN_DEFAULT": "0"}),
     "ornith-122b": ("install-ornith-122b.sh", "ORNITH_122B", {"patches": "system-reminder,tool-reference"}),
     "kolibri": ("install-kolibri.sh", "KOLIBRI_FP8", None),
     "kolibri-nvfp4": ("install-kolibri.sh", "KOLIBRI_NVFP4", None),
