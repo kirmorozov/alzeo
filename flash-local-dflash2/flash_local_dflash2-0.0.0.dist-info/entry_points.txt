@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+flash_local_dflash2 = flash_local_dflash2.plugin:register
