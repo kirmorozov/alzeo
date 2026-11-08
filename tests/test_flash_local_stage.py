@@ -235,6 +235,22 @@ class TheStagedUnit(unittest.TestCase):
         self.assertIn(str(copy), flags.get("lacks", ""))
         self.assertNotIn("cannot", flags)
 
+    def test_a_dflash2_start_missing_its_drafter_names_its_own_target(self):
+        # Only the dflash2 unit ever asks for the drafter's snapshot and the plugin's copy.
+        # Its line said ./switch-model.sh flash-local whatever the target, so the operator
+        # was sent to the MTP target, which starts fine and buried what was missing (found
+        # on the reference box, 2026-11-07, where it ended the dflash2 try).
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_VARIANT="dflash2")
+        self.assertEqual(rc, 0, out)
+        unit = self.box.out.read_text()
+        self.assertIn("--speculative-config.method dflash", exec_command(unit))
+        r = subprocess.run(self.guard(unit), capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 78, r.stderr)
+        self.assertIn("models--incoai--Qwen3.8-Flash-Next-DFlash2", r.stderr)
+        self.assertIn("its DFlash2 drafter's snapshot, or its capture plugin", r.stderr)
+        self.assertIn("run ./switch-model.sh flash-local-dflash2", r.stderr)
+        self.assertNotIn("run ./switch-model.sh flash-local\n", r.stderr)
+
     def test_its_check_gone_the_start_stops_with_its_line(self):
         # a configuration restored from before the check: bash exited 127, which systemd started
         # again every 15 s, on a line the cockpit does not read (found in review, 2026-10-20)

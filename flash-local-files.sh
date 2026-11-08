@@ -83,13 +83,21 @@ done
 # unit asks for neither, and its line stays today's, byte for byte (the drafter's snapshot is in
 # the same cache the checkpoint is in, the plugin in the config directory the unit mounts it from)
 what="its checkpoint, or a copy of its n-gram table"
+target="flash-local"
 for f in "$@"; do
   case "$f" in
-    */models--incoai--Qwen3.8-Flash-Next-DFlash2/*|*/flash-local-dflash2/*)
-      what="its checkpoint, a copy of its n-gram table, its DFlash2 drafter's snapshot, or its capture plugin" ;;
+    *DFlash2*|*/flash-local-dflash2/*)
+      # the drafter's snapshot by its arch, whatever repo owns it, and the plugin's copy by its
+      # folder: the two files only the dflash2 unit is ever asked for
+      what="its checkpoint, a copy of its n-gram table, its DFlash2 drafter's snapshot, or its capture plugin"
+      target="flash-local-dflash2" ;;
   esac
 done
+# The target named is the one this start was asked for: the drafter's files are missing when the
+# dflash2 target started without them, and a line that then said ./switch-model.sh flash-local
+# sent the operator to the MTP target, which starts fine and buries what was actually missing
+# (found on the reference box, 2026-11-07)
 echo "preflight: qwen38-flash-local.service lacks its files: $missing is missing or not whole ($what), or the" \
      "disk that holds the Hugging Face cache is not mounted. With that disk mounted, Load the lane from" \
-     "the cockpit, or run ./switch-model.sh flash-local" >&2
+     "the cockpit, or run ./switch-model.sh $target" >&2
 exit 78
