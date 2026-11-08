@@ -295,11 +295,24 @@ CACHE_DIR="$CONFIG_DIR/flash-local-cache"
 PYTHONPATH_LINE="/opt/qwen38-auth"
 PLUGIN_MOUNT=""
 DRAFT_FILES=""
+# The KV cache layout the drafter's group needs, in the container's own environment (empty:
+# vLLM resolves it, which is how the mtp unit has always run it). See the dflash2 branch.
+KV_LAYOUT_LINE=""
 if [ "$VARIANT" = dflash2 ]; then
   LM_HEAD_LINE=""
   CACHE_DIR="$CONFIG_DIR/flash-local-cache-dflash2"
   PYTHONPATH_LINE="/opt/qwen38-auth:/opt/df2-plugin"
   PLUGIN_MOUNT="--mount type=bind,source=$CONFIG_DIR/flash-local-dflash2,target=/opt/df2-plugin,readonly"
+  # Why this line exists (the boot of 2026-11-08, from the plugin's own kvdiag receipt): the
+  # drafter's attention is one group of five layers sharing one KV tensor, and vLLM resolved
+  # the layout to BLHNC, which keeps a block's five layer pages next to each other. Its own
+  # check then refuses the split that group's manager block (3008 tokens) needs into 64-token
+  # kernel blocks, because that is a valid view only when a manager block is one dense page
+  # (block stride 30801920 = 5 x 6160384, page 6160384). LBNHC hoists the layer dim out of the
+  # block, which makes a block one dense page and is the layout vLLM names in that very
+  # message. The drafter's group is what forces it; mtp keeps vLLM's own resolution, byte for
+  # byte, because its draft shares the target's groups and no group is split at all.
+  KV_LAYOUT_LINE="-e VLLM_KV_CACHE_LAYOUT=LBNHC "
   # What the check of the unit's files asks for besides the checkpoint and the table's copies:
   # the drafter's snapshot, its config and its one weights file, non-empty, in the cache the
   # unit reads, and every file of the capture plugin's copy, as the repo's folder has them (the
@@ -364,6 +377,7 @@ render_unit(){
       -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e "s|__SPEC_CONFIG__|$SPEC_CONFIG|g" \
       -e "s|__LM_HEAD_LINE__|$LM_HEAD_LINE|g" -e "s|__CACHE_DIR__|$CACHE_DIR|g" \
       -e "s|__PYTHONPATH__|$PYTHONPATH_LINE|g" -e "s|__PLUGIN_MOUNT__|$PLUGIN_MOUNT|g" \
+      -e "s|__KV_LAYOUT_LINE__|$KV_LAYOUT_LINE|g" \
       -e '/^ *\\$/d' \
       "$HERE/$UNIT.template" > "$1"
 }

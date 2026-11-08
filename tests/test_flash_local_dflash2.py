@@ -288,6 +288,19 @@ class TheDflash2Target(unittest.TestCase):
         self.assertIn("flash_local_dflash2 = flash_local_dflash2.plugin:register",
                       self.box.plugin_marker().read_text())
 
+    def test_the_drafter_group_gets_a_layer_compact_kv_layout(self):
+        """The drafter's five-layer group is only viewable under a layout that keeps a manager
+        block one dense page; the mtp target names no layout at all and vLLM resolves it."""
+        rc, out = self.box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        lines = [ln for ln in self.box.out.read_text().splitlines() if "VLLM_KV_CACHE_LAYOUT" in ln]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].strip().startswith("-e VLLM_KV_CACHE_LAYOUT=LBNHC"), lines)
+        self.assertTrue(lines[0].endswith("\\"), lines)
+        rc, out = self.box.stage(FLASH_LOCAL_VARIANT="mtp", FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("VLLM_KV_CACHE_LAYOUT", self.box.out.read_text())
+
     def test_it_builds_in_its_own_caches(self):
         rc, out = self.box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual(rc, 0, out)
