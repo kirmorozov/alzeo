@@ -352,12 +352,26 @@ function connect(){
   // handlers hold their OWN stream: a late event from a replaced one must not flip the state
   const src = new EventSource('/api/stream');
   es = src;
+  src.lastAt = Date.now();
   src.onopen = () => { if (es !== src) return; sseUp = true; setConn(true, 'live'); if (pollTimer){ clearInterval(pollTimer); pollTimer = null; } };
-  src.onmessage = ev => { if (es !== src) return; try { apply(JSON.parse(ev.data)); setConn(true, 'live'); } catch(e){ console.warn('bad frame', e.message); } };
+  src.onmessage = ev => { if (es !== src) return; src.lastAt = Date.now(); try { apply(JSON.parse(ev.data)); setConn(true, 'live'); } catch(e){ console.warn('bad frame', e.message); } };
   src.onerror = () => {
     if (es !== src){ try { src.close(); } catch { /* gone */ } return; }
     sseUp = false; setConn(false, 'reconnecting'); src.close(); startPolling(); setTimeout(connect, 3000);
   };
+  // A corporate proxy (SSL-inspecting egress) can hold an SSE answer in its own buffer
+  // and never deliver it, with the connection left OPEN: EventSource sees no error and
+  // would sit there forever while the page rots. The cockpit writes every 2 s, so a
+  // stream silent for 10 s is a stream the network is eating: treat it as dead, poll
+  // to stay live, and keep climbing back (the stall re-arms through connect()).
+  (function stall(){
+    if (es !== src) return;
+    if (Date.now() - src.lastAt > 10000){
+      src.close(); sseUp = false; setConn(false, 'stream held by proxy'); startPolling(); connect();
+      return;
+    }
+    setTimeout(stall, 2000);
+  })();
 }
 function startTransport(){
   fetch('/api/state').then(r => { if (r.status === 401){ login(); return null; } return r.json(); })
