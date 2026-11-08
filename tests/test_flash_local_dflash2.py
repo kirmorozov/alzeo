@@ -52,6 +52,9 @@ DFLASH2_FLAGS = ("--speculative-config.method dflash "
                  f"--speculative-config.model {PINS['FLASH_LOCAL_DRAFT_REPO']} "
                  f"--speculative-config.revision {DRAFT_REV} "
                  "--speculative-config.num_speculative_tokens {n}")
+# the drafter's own loader, one more dotted key on the same line of the unit: the checkpoint
+# keeps b12x, the drafter's plain safetensors goes through vLLM's own loader
+DRAFT_LOAD_FLAG = " --speculative-config.draft_load_config.load_format auto"
 
 
 def pre_dflash2_render(home, hf):
@@ -175,10 +178,13 @@ class TheDflash2Target(unittest.TestCase):
         rc, out = self.box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual(rc, 0, out)
         unit = self.box.out.read_text()
-        self.assertIn("    " + DFLASH2_FLAGS.format(n=3) + " \\\n", unit)
+        self.assertIn("    " + DFLASH2_FLAGS.format(n=3) + DRAFT_LOAD_FLAG + " \\\n", unit)
         self.assertNotIn("--speculative-config.method mtp", unit)
         self.assertNotIn("num_speculative_tokens 4", unit)
-        self.assertNotIn("draft_load_config", unit, "the loader fallback is off until a boot asks for it")
+        # the drafter goes through vLLM's own loader, the one flag the Nemotron lane's dflash
+        # drafter carries too: the checkpoint keeps b12x, the drafter's plain BF16 file does
+        # not want the loader built for the checkpoint's quantized shards
+        self.assertIn("--speculative-config.draft_load_config.load_format auto", unit)
         # no JSON and no quote inside the unit's one single-quoted ExecStart: what reaches the
         # engine is what the line says, word for word, the dotted keys the parser folds into one
         # speculative config
@@ -188,30 +194,36 @@ class TheDflash2Target(unittest.TestCase):
         self.assertNotIn("'", serve)
         self.assertNotIn("{", serve)
         self.assertNotIn("\\", serve)
-        self.assertEqual(serve.count("--speculative-config"), 4)
+        self.assertEqual(serve.count("--speculative-config"), 5)
         r = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
+        # and the MTP target, which loads no drafter at all, keeps the unit it had
+        rc, out = self.box.stage(FLASH_LOCAL_VARIANT="mtp", FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("draft_load_config", self.box.out.read_text(),
+                         "the mtp unit has no drafter to load")
 
-    def test_the_loader_fallback_is_one_line_of_the_installer(self):
-        # the escape hatch for a b12x loader that refuses the drafter: the installer's own
-        # FLASH_LOCAL_DRAFT_LOAD_FORMAT line, empty today, "auto" then, rendered as one more
-        # dotted flag the image's parser nests under draft_load_config
+    def test_the_drafter_goes_through_vllms_own_loader_and_the_installer_line_names_it(self):
+        # the drafter is one plain BF16 model.safetensors with no index of its own: it goes
+        # through vLLM's loader, as the LiLiCorr drafter of the Nemotron lane does
+        # (qwen38-nemotron.service.template:81). The b12x loader the checkpoint reads is an
+        # O_DIRECT/GDS read of that checkpoint's quantized shards, keyed on its
+        # model.safetensors.index.json and on an initial-load session the drafter has no part
+        # in (b12x_loader.py:224, :280 of the pinned wheel). The one line of the installer is
+        # the knob: naming b12x there hands the drafter to the target's loader instead.
         text = (REPO / "install-flash-local.sh").read_text()
-        self.assertEqual(text.count('\nFLASH_LOCAL_DRAFT_LOAD_FORMAT=""\n'), 1)
+        self.assertEqual(text.count('\nFLASH_LOCAL_DRAFT_LOAD_FORMAT="auto"\n'), 1)
         box = Box(without_plugin=True)
         try:
             shutil.copytree(PLUGIN_DIR, box.repo / "flash-local-dflash2")
             inst = box.repo / "install-flash-local.sh"
-            inst.write_text(inst.read_text().replace('\nFLASH_LOCAL_DRAFT_LOAD_FORMAT=""\n',
-                                                     '\nFLASH_LOCAL_DRAFT_LOAD_FORMAT="auto"\n'))
+            inst.write_text(inst.read_text().replace('\nFLASH_LOCAL_DRAFT_LOAD_FORMAT="auto"\n',
+                                                     '\nFLASH_LOCAL_DRAFT_LOAD_FORMAT="b12x"\n'))
             rc, out = box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
             self.assertEqual(rc, 0, out)
-            unit = box.out.read_text()
             self.assertIn("    " + DFLASH2_FLAGS.format(n=3)
-                          + " --speculative-config.draft_load_config.load_format auto \\\n", unit)
-            rc, out = box.stage(FLASH_LOCAL_VARIANT="mtp", FLASH_LOCAL_PLE_DIR="none")
-            self.assertEqual(rc, 0, out)
-            self.assertNotIn("draft_load_config", box.out.read_text(), "the mtp unit has no drafter to load")
+                          + " --speculative-config.draft_load_config.load_format b12x \\\n",
+                          box.out.read_text())
         finally:
             shutil.rmtree(box.t, ignore_errors=True)
 

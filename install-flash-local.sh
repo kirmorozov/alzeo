@@ -127,14 +127,19 @@ FLASH_LOCAL_TABLE_GB="33"
 FLASH_LOCAL_DRAFT_REPO="incoai/Qwen3.8-Flash-Next-DFlash2"
 FLASH_LOCAL_DRAFT_REV="a22a1744e85c17364dcc54a6a420af7135d4c7f6"
 FLASH_LOCAL_DRAFT_GB="2"
-# The loader the drafter's one weights file goes through: empty, the image's own b12x loader,
-# the one the unit's --load-format gives the checkpoint, which the image hands the drafter too
-# (its spec config takes the target's load config unless draft_load_config says otherwise).
-# The escape hatch, should the first boot show that loader refusing or misreading the drafter's
-# repo: "auto" here routes the drafter to vLLM's default safetensors loader while the checkpoint
-# keeps b12x, rendered as one more dotted flag (the image's parser nests dotted keys into the
-# one JSON it hands SpeculativeConfig, vllm/utils/argparse_utils.py:408-434 of the pinned wheel).
-FLASH_LOCAL_DRAFT_LOAD_FORMAT=""
+# The loader the drafter's one weights file goes through: "auto", vLLM's own safetensors
+# loader, which is what the lane that already drafts with this image does for its drafter
+# (qwen38-nemotron.service.template:81, --speculative-config.draft_load_config.load_format auto).
+# Not the empty value, which would leave the drafter on the target's --load-format, the image's
+# b12x loader: that one is built for this checkpoint's quantized shards (an O_DIRECT/GDS read
+# into CUDA tensors), it reads the shard list out of model.safetensors.index.json, which the
+# drafter's snapshot has none of, and its weight iterators raise without an active initial-load
+# session, which is the checkpoint's preparation, not the drafter's (b12x_loader.py:224 and :280
+# of the pinned wheel). One line of the unit's flag list, rendered as one more dotted key (the
+# image's parser nests dotted keys into the one JSON it hands SpeculativeConfig,
+# vllm/utils/argparse_utils.py:408-434 of the pinned wheel). Naming "b12x" here puts the
+# drafter back on the inherited loader, should a drafter of another shape ever want it.
+FLASH_LOCAL_DRAFT_LOAD_FORMAT="auto"
 MODEL="$FLASH_LOCAL_REPO"; MODEL_REV="$FLASH_LOCAL_REV"
 GMU="$FLASH_LOCAL_GMU"; WEIGHTS_GB="$FLASH_LOCAL_GB"; SEQS="$FLASH_LOCAL_SEQS"
 # Its pull at its peak: 18.2 GB unpacked and 9.7 GB to download, which the containerd image store
