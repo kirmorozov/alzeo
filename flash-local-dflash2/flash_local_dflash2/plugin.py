@@ -21,6 +21,7 @@ def register() -> None:
     from vllm.model_executor.models.config import MODELS_CONFIG_MAP
 
     from .config import install
+    from .kvdiag import install as install_kv_diagnostics
 
     # register_model overrides the image's entry for the arch; the lane serves
     # only this arch, and only on the CUDA build the image ships.
@@ -29,3 +30,5 @@ def register() -> None:
         "flash_local_dflash2.model:DFlashQwen4ExpForConditionalGeneration",
     )
     install(MODELS_CONFIG_MAP)
+    # Failure B reports strides without the specs behind them; this records them.
+    install_kv_diagnostics()
