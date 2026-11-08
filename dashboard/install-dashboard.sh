@@ -14,6 +14,12 @@
 # variable is set again: an upgrade must never flip a cockpit back to loopback.
 # The Agent tab's relay (DASH_AGENT_PORT, DASH_AGENT_BIND, DASH_AGENT_UPSTREAM) is
 # normally set by dashboard/install-agent.sh, which calls this script.
+# Remote access behind a reverse proxy (dashboard/proxy.md): DASH_MAGIC_SECRET (kept
+# in a 0600 file the unit reads, never in the unit itself), DASH_MAGIC_HEADER,
+# DASH_PROXY_PORT (the dedicated header-only listener the proxy points at),
+# DASH_PROXY_OPEN (1 = that listener temporarily answers without the header, for
+# wiring the proxy up; close with 0), DASH_PUBLIC_URL and DASH_AGENT_PUBLIC_URL
+# (public URLs, CSP only).
 # The sudoers file is validated with visudo -c BEFORE it lands, from a temp
 # path, so a broken render can never brick sudo.
 set -euo pipefail
@@ -41,6 +47,24 @@ BIND="${DASH_BIND:-$(installed COCKPIT_BIND)}"; BIND="${BIND:-127.0.0.1}"
 AGENT_PORT="${DASH_AGENT_PORT:-$(installed COCKPIT_AGENT_PORT)}"; AGENT_PORT="${AGENT_PORT:-0}"
 AGENT_BIND="${DASH_AGENT_BIND:-$(installed COCKPIT_AGENT_BIND)}"; AGENT_BIND="${AGENT_BIND:-tailscale}"
 AGENT_UPSTREAM="${DASH_AGENT_UPSTREAM:-$(installed COCKPIT_AGENT_UPSTREAM)}"; AGENT_UPSTREAM="${AGENT_UPSTREAM:-http://127.0.0.1:4096}"
+# Remote access behind a reverse proxy (dashboard/proxy.md). The secret itself is not
+# kept in the unit (world-readable): DASH_MAGIC_SECRET lands in a 0600 file the unit
+# reads, and a re-run without it keeps the installed one, as the bind and port above.
+MAGIC_HEADER="${DASH_MAGIC_HEADER:-$(installed COCKPIT_MAGIC_HEADER)}"; MAGIC_HEADER="${MAGIC_HEADER:-X-Alzeo-Auth}"
+PUBLIC_URL="${DASH_PUBLIC_URL:-$(installed COCKPIT_PUBLIC_URL)}"; PUBLIC_URL="${PUBLIC_URL:-}"
+AGENT_PUBLIC_URL="${DASH_AGENT_PUBLIC_URL:-$(installed COCKPIT_AGENT_PUBLIC_URL)}"; AGENT_PUBLIC_URL="${AGENT_PUBLIC_URL:-}"
+PROXY_PORT="${DASH_PROXY_PORT:-$(installed COCKPIT_PROXY_PORT)}"; PROXY_PORT="${PROXY_PORT:-0}"
+PROXY_OPEN="${DASH_PROXY_OPEN:-$(installed COCKPIT_PROXY_OPEN)}"; PROXY_OPEN="${PROXY_OPEN:-0}"
+[[ "$PROXY_OPEN" =~ ^[01]$ ]] || die "DASH_PROXY_OPEN must be 0 or 1 (got '$PROXY_OPEN')"
+[[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || die "DASH_PROXY_PORT must be a number (got '$PROXY_PORT')"
+if [ "$PROXY_PORT" != "0" ]; then
+  [ "$PROXY_PORT" != "$PORT" ] || die "the proxy listener cannot share the cockpit port $PORT"
+  [ "$PROXY_PORT" != "$AGENT_PORT" ] || die "the proxy listener cannot share the agent relay port $AGENT_PORT"
+fi
+[[ "$MAGIC_HEADER" =~ ^[A-Za-z0-9._-]+$ ]] || die "DASH_MAGIC_HEADER must be a plain header name, letters digits . _ - (got '$MAGIC_HEADER')"
+url_ok(){ [ -z "$1" ] || [[ "$1" =~ ^https?://[^[:space:]|]+$ ]] || die "$2 must be a full http(s):// URL or empty (got '$1')"; }
+url_ok "$PUBLIC_URL" DASH_PUBLIC_URL
+url_ok "$AGENT_PUBLIC_URL" DASH_AGENT_PUBLIC_URL
 [[ "$PORT" =~ ^[0-9]+$ ]] || die "DASH_PORT must be a number (got '$PORT')"
 [[ "$AGENT_PORT" =~ ^[0-9]+$ ]] || die "DASH_AGENT_PORT must be a number (got '$AGENT_PORT')"
 [ "$AGENT_PORT" != "$PORT" ] || die "the agent relay cannot share the cockpit port $PORT"
@@ -80,6 +104,21 @@ stale_since(){
   return 1
 }
 
+# The proxy secret (dashboard/proxy.md): a 0600 file the unit reads with
+# EnvironmentFile, because unit files are world-readable. Set again it replaces the
+# installed one; unset on a re-run keeps what is there, like every other setting.
+DASH_ENV_FILE="$HOME/.config/qwen38/dashboard.env"
+if [ -n "${DASH_MAGIC_SECRET:-}" ]; then
+  [[ "$DASH_MAGIC_SECRET" != *$'\n'* ]] || die "DASH_MAGIC_SECRET must be a single line"
+  mkdir -p "$HOME/.config/qwen38"
+  TMP_ENV="$(mktemp "$HOME/.config/qwen38/.dashboard.env.XXXXXX")"
+  # keep any other KEY=VALUE lines the file holds, replace only the secret
+  { { grep -v '^COCKPIT_MAGIC_SECRET=' "$DASH_ENV_FILE" 2>/dev/null || true; }
+    printf 'COCKPIT_MAGIC_SECRET=%s\n' "$DASH_MAGIC_SECRET"; } > "$TMP_ENV"
+  chmod 600 "$TMP_ENV"
+  mv "$TMP_ENV" "$DASH_ENV_FILE"
+fi
+
 TMP_UNIT="$(mktemp)"
 # removed however this ends: a die, or a failed install under set -e, between here and the rm
 # below left the rendered unit in /tmp, once for every test run that took such a path (2026-10-03)
@@ -89,6 +128,9 @@ sed -e "s|__PORT__|$PORT|g" -e "s|__BIND__|$BIND|g" -e "s|__USER__|$(id -un)|g" 
     -e "s|__HOME__|$HOME|g" \
     -e "s|__AGENT_PORT__|$AGENT_PORT|g" -e "s|__AGENT_BIND__|$AGENT_BIND|g" \
     -e "s|__AGENT_UPSTREAM__|$AGENT_UPSTREAM|g" \
+    -e "s|__MAGIC_HEADER__|$MAGIC_HEADER|g" \
+    -e "s|__PROXY_PORT__|$PROXY_PORT|g" -e "s|__PROXY_OPEN__|$PROXY_OPEN|g" \
+    -e "s|__PUBLIC_URL__|${PUBLIC_URL//&/\\&}|g" -e "s|__AGENT_PUBLIC_URL__|${AGENT_PUBLIC_URL//&/\\&}|g" \
     "$HERE/qwen38-dashboard.service.template" > "$TMP_UNIT"
 grep -q '__[A-Z][A-Z0-9_]*__' "$TMP_UNIT" && die "unsubstituted placeholder in unit"
 DASH_CHANGED=0
@@ -117,7 +159,7 @@ sudo systemctl enable --now "$UNIT"
 # engine-inputs.py, oc-merge-limits.py and conformity.py too: the cockpit loads them once (what
 # an update owes the serving engine, the opencode limits, the box against what its clone
 # recommends), and a change to one alone left the old code in memory (found in review, 2026-10-17).
-if [ "$DASH_CHANGED" -eq 1 ] || stale_since "$UNIT" "$HERE"/*.py "$REPO_DIR/oc-fit-limits.py" "$REPO_DIR/oc-merge-limits.py" "$REPO_DIR/engine-inputs.py" "$REPO_DIR/conformity.py" "$REPO_DIR/boxmem.py" "$REPO_DIR/CHANGELOG.md"; then
+if [ "$DASH_CHANGED" -eq 1 ] || stale_since "$UNIT" "$HERE"/*.py "$REPO_DIR/oc-fit-limits.py" "$REPO_DIR/oc-merge-limits.py" "$REPO_DIR/engine-inputs.py" "$REPO_DIR/conformity.py" "$REPO_DIR/boxmem.py" "$REPO_DIR/CHANGELOG.md" "$DASH_ENV_FILE"; then
   sudo systemctl try-restart "$UNIT"
 fi
 for _ in $(seq 1 15); do

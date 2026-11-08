@@ -23,7 +23,14 @@ function agentMaxDefault(){
   if (pref === '0') return false;
   return window.matchMedia('(max-width:980px)').matches;
 }
-const agentUrl = () => F.agent && F.agent.relay && F.agent.relay.port ? `http://${location.hostname}:${F.agent.relay.port}/` : null;
+const agentUrl = () => {
+  const r = F.agent && F.agent.relay;
+  if (!r || !r.port) return null;
+  // An https page can only be the proxy's (the cockpit itself serves plain http):
+  // the relay is then framed where the proxy serves it, its local port would not answer.
+  if (r.public_url && location.protocol === 'https:') return r.public_url + '/';
+  return `http://${location.hostname}:${r.port}/`;
+};
 const agentReady = () => !!(F.agent && F.agent.enabled && F.agent.relay && F.agent.relay.listening && F.agent.server && F.agent.server.healthy);
 function agentMessage(text, cmd){
   show('ag-msg', true); setText('ag-msg-text', text);

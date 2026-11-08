@@ -50,6 +50,16 @@ That moves the page only. The Agent view's relay keeps its own address,
 the same drop-in (`Environment=COCKPIT_AGENT_BIND=tailscale`, or an address), or re-run
 that script with `AGENT_BIND=`.
 
+Behind a reverse proxy it gets a second way in: nginx proxy manager does the
+Basic-auth at the edge and injects a header carrying a shared secret
+(`DASH_MAGIC_SECRET`), and a request that presents it reads as signed in, page and
+Agent relay alike, while the direct path keeps asking for the API key. A dedicated
+header-only listener (`DASH_PROXY_PORT`, 30095 by convention) is what the proxy
+points at; one host there is enough for the whole status view (the engine and the
+keepalive proxy are read server-side, never by the browser); a second, `30091`, is
+the Agent view only. The recipe, both access paths and the rotation notes are in
+[`dashboard/proxy.md`](../dashboard/proxy.md).
+
 ## What it looks like
 
 ![The cockpit's Now view: one pool of unified memory and what holds it, the lanes in their rack with their makers' marks and the serving one edged in green, and below them the requests and the timeline](img/cockpit-now.png)
