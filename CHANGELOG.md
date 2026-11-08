@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased: the Flash FP4-Local lane's second target, DFlash2 beside the card's MTP head, opens the image's own gate, loads its drafter through vLLM's own loader, and names itself when its files are missing
+
+The Flash FP4-Local lane (`docs/flash-local-lane.md`) now serves its checkpoint under a second target,
+`flash-local-dflash2`: the same `nvidia/Qwen3.8-Flash-Next-FP4-Local`, the same unit (`qwen38-flash-local.service`),
+the same port and the same served name (`qwen3.8-flash-next-fp4`), drafted by `incoai/Qwen3.8-Flash-Next-DFlash2`
+instead of the checkpoint's MTP head. Three changes make that target start at all, load its drafter, and say what
+it is missing when it cannot:
+
+**The lane opens the image's own gate, because the image would not draft this target at all.** The pinned image's
+hook for the arch (`MODELS_CONFIG_MAP[Qwen4ExpForConditionalGeneration]`, in its `vllm/model_executor/models/config.py`)
+allows the speculative methods `mtp`, `ngram` and `ngram_gpu` alone, and the box's first dflash2 try died there, in
+the API server's `create_engine_config`, before the capture subclass was ever resolved (2026-11-07):
+`NotImplementedError: Qwen4Exp speculative decoding supports only its native MTP checkpoint and linear n-gram
+proposers`. The image ships the drafter's whole path beside that refusal (`DFlashModelTypes` names the method,
+`init_speculator` chooses `DFlash2Speculator` for the drafter's `DFlash2DraftModel` arch, `qwen3_dflash2` holds its
+layers), so it is the image's own policy for its MTP build, not a missing implementation, and a lane whose image is
+pinned by digest answers a policy without touching the container. `flash_local_dflash2/config.py` installs a
+subclass of the image's hook that calls the image's hook and keeps every check it makes, the hybrid-cache contract
+it delegates to Qwen3_5, `hc_count`, PLE/QSA against dual-batch overlap and microbatching, PLE against pipeline
+parallelism and the mrope strip, and steps over its method whitelist alone, for the one method `dflash` and for
+this lane's two arch names alone: every other method gets the image's answer word for word, and a refusal in other
+words, or one the image has since reworded, goes out to the operator instead of being swallowed (the way it fails
+safe). `flash_local_dflash2/plugin.py` registers it as a vLLM general plugin, the entry point its `.dist-info`
+carries, which vLLM's plugin loader runs in the API server before the config is built and in the engine core and
+every worker before a model is built, and only the dflash2 unit mounts the package read-only at `/opt/df2-plugin`
+on `PYTHONPATH`: the MTP target goes on served by the image's hook untouched, and the two targets stay switchable.
+
+**A missing drafter now names the target whose files are missing.** When the dflash2 target started without its
+drafter's snapshot or its plugin copy, the check at the head of the unit's `ExecStart` (`flash-local-files.sh`)
+said the base line and gave the remedy `./switch-model.sh flash-local`, which starts the MTP target just fine and
+buried what was actually absent, ending the dflash2 try on the reference box (2026-11-07). The line now names
+`./switch-model.sh flash-local-dflash2` when the missing files are the dflash2 unit's own, so the operator is sent
+to fetch what the refused start was really asked for.
+
+**The drafter goes through vLLM's own loader, as the other dflash lane's does.** The unit rendered no
+`draft_load_config`, which left the drafter on the target's `--load-format`, the image's b12x loader. That loader
+is built for this checkpoint's quantized shards, an O_DIRECT/GDS read into CUDA tensors with its file list taken
+from `model.safetensors.index.json` and its weight iterators raising without an active initial-load session
+(`b12x_loader.py:224` and `:280` of the pinned wheel), while the drafter is one plain BF16 `model.safetensors` of
+1.21 GB with no index of its own and no part in that session. `install-flash-local.sh` now sets
+`FLASH_LOCAL_DRAFT_LOAD_FORMAT=auto`, so the dflash2 unit renders `--speculative-config.draft_load_config.load_format
+auto` and the drafter goes through vLLM's own safetensors loader while the checkpoint keeps b12x, which is what the
+lane that already drafts with this image does for its drafter (`qwen38-nemotron.service.template:81`); naming
+`b12x` on the installer's line hands the drafter back to the target's loader should a drafter of another shape ever
+want it, and the MTP target, which loads no drafter, keeps the unit it had.
+
 ## v1.43.0 (2026-11-05): two boxes that serve one model share its requests, a conversation staying on the box that holds it
 
 **Two boxes that serve one model share its requests.** Until now, the box a request was sent to served every model it

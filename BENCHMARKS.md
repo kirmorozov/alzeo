@@ -19,6 +19,36 @@ stock DGX OS), with the page that measured it and gives its date, version and me
 
 The sections below were measured on the same box between 2026-08-14 and 2026-09-21, each section under its own date and version (2026-08-14/15 for the v1.0-v1.1 sections, 2026-08-19/20 for v1.2's boot-lottery campaign), plus independent reproductions by other GB10 owners. Speeds are **batch-1 decode**; quality was verified identical to a Q8 reference on a deterministic battery (code, logic, language, instruction following); speculative decoding is lossless by construction (the verify step only ever accepts tokens the target model would have emitted).
 
+## Flash FP4-Local, the card's MTP against its own DFlash2 target at depth 3 (open: nothing measured yet)
+
+The Flash FP4-Local lane grew a second target on its one unit (`qwen38-flash-local.service`,
+the same pinned image, checkpoint, port and served name `qwen3.8-flash-next-fp4`):
+`flash-local-dflash2` drafts `nvidia/Qwen3.8-Flash-Next-FP4-Local` with
+`incoai/Qwen3.8-Flash-Next-DFlash2` at draft depth 3, where the lane's default target,
+`flash-local`, uses the checkpoint's own MTP head drafting 4 (`install-flash-local.sh`,
+[docs/flash-local-lane.md](docs/flash-local-lane.md)). Only what vLLM loads differs, and the
+drafter's one plain BF16 `model.safetensors`, 1.21 GB, is all the box downloads for it.
+
+The head-to-head is not run. The MTP column below is quoted, not measured anew: the
+per-probe ranges are the reference `bench.sh` prints for this lane (its `flash-local` entry
+in `HEADERS`), the greedy median the two runs of `docs/flash-local-lane.md`'s Memory section,
+all of them the reference box on 2026-10-20 at the lane's default effort (`xhigh`). The
+DFlash2 column stays TBD: no figure for that target exists, and none is projected here, not
+from the 27B lane's DFlash2 rows above (another model, checkpoint, engine and drafter) nor
+from the MTP column with the depth changed.
+
+| `./bench.sh` probe (batch 1 decode, tok/s) | MTP, drafting 4 (quoted) | DFlash2, drafting 3 |
+|---|---|---|
+| code (greedy) | 56.2-57.4 | TBD |
+| reasoning (greedy) | 52.8-54.3 | TBD |
+| math peak (temp 0.6) | 46.5-49.2 | TBD |
+| free prose (greedy, worst case, out of the median) | 33.4-35.5 | TBD |
+| **greedy median** | **55.1-55.4** | **TBD** |
+
+The table fills when `./bench.sh` runs on the target on the reference box, under this file's
+protocol: a boot's first batch thrown away, both targets read on the one unit within one
+session, each figure kept with its date, its boot and the effort its template gave it.
+
 ## The first headline, August 2026 (v1.0-v1.1, same box, same day), kept as history
 
 | Engine / config | Code & math reasoning, French prompts (official sampling, temp 1.0) | Eval-style workloads (EN, temp 0.6) |

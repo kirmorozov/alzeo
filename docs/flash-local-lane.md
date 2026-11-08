@@ -59,6 +59,87 @@ less disk (121 against 223: a smaller checkpoint and image, and no table written
 nothing at boot, starts in less than half the time, holds twice the KV cache and leaves the box some 7 GiB
 more of free memory in service. Which to load is a choice of use, and the cockpit loads either.
 
+## The lane's two targets: the card's MTP head, and incoai's DFlash2 beside it
+
+The lane serves its checkpoint under two targets. `flash-local` is the one this whole page measured: the card's
+recipe, the checkpoint's own MTP head drafting 4 tokens, and the pinned image's own hook for the arch untouched.
+`flash-local-dflash2` is the second: the same `nvidia/Qwen3.8-Flash-Next-FP4-Local`, drafted instead by incoai's
+DFlash2 drafter (`incoai/Qwen3.8-Flash-Next-DFlash2`, pinned at its revision of 2026-11-05, one plain BF16
+`model.safetensors` of 1.21 GB), at a draft depth of 3 (`FLASH_LOCAL_DRAFT_TOKENS`) against the card's 4. The
+drafter's repo, pin and size are `install-flash-local.sh`'s.
+
+One unit, `qwen38-flash-local.service`, serves both, and switching between them changes only what vLLM loads. The
+host, the port, the proxy and its key, the served name (`qwen3.8-flash-next-fp4`) and the window of 262,144 do not
+move, so no client of the lane and no cockpit or pair setting changes when the target does. The image does not move
+either: the second target runs the same pinned `eugr/spark-vllm-b12x` as the first, which is why it needs a plugin
+rather than a patch (the gate, below). What the dflash2 unit adds to the engine's command is the drafter
+(`--speculative-config.method dflash` with its repo, its pinned revision and its draft length), the drafter's
+loader (`--speculative-config.draft_load_config.load_format auto`, vLLM's own safetensors path, while the
+checkpoint keeps the image's b12x loader), and the capture plugin, mounted read-only at `/opt/df2-plugin` on the
+engine's `PYTHONPATH`; what it drops is the card's `VLLM_MXFP8_LM_HEAD` line, this checkpoint storing its output
+head in BF16; and it keeps its own engine caches (`flash-local-cache-dflash2`), so the two targets never read each
+other's compiles. The one download the second target asks for is the drafter's snapshot, into the same Hugging Face
+cache as the checkpoint, resumable: 1.21 GB, and no second checkpoint and no second image.
+
+From a terminal: `./prepare-lane.sh flash-local-dflash2` the first time, then `./switch-model.sh
+flash-local-dflash2`, and `./switch-model.sh flash-local` back; the cockpit loads either target too. A start
+without the drafter's snapshot or a whole copy of the plugin stays failed, as every start without its files does
+(below), and the line the unit's check of its files prints names the target that needs them, `./switch-model.sh
+flash-local-dflash2` (`flash-local-files.sh`; it used to name the MTP target, which starts fine on a box missing
+the drafter, and buried what was absent).
+
+MTP stays the default and the way back. It is what the installer renders when nothing names a target
+(`FLASH_LOCAL_VARIANT` unset and the installed unit naming no drafter), it is what every speed on this page and the
+reference `bench.sh` prints for the lane were measured on, and it is what `./switch-model.sh flash-local` starts on
+a box where the second target will not come up: its unit loads no drafter and mounts no plugin, so nothing the
+second target needs has to be present for it to serve.
+
+The gate the second target had to open: the pinned image refuses this arch for every speculative method but `mtp`,
+`ngram` and `ngram_gpu`. Its hook for the arch, in the image's `vllm/model_executor/models/config.py`, met the
+box's first dflash2 try and refused it before any model class was resolved, in the API server's
+`create_engine_config` (2026-11-07):
+
+    NotImplementedError: Qwen4Exp speculative decoding supports only its native MTP
+    checkpoint and linear n-gram proposers
+
+The image ships the drafter's whole path beside that refusal, so it is the image's own policy for its MTP build
+rather than a missing implementation: `DFlashModelTypes` names the method, `init_speculator` chooses
+`DFlash2Speculator` for the drafter's `DFlash2DraftModel` arch, and `vllm/model_executor/models/qwen3_dflash2.py`
+holds its layers. The lane answers the policy without touching the container. `flash_local_dflash2/config.py`
+installs a subclass of the image's hook that calls the hook and keeps every check it makes, the hybrid-cache
+contract it delegates to Qwen3_5, `hc_count`, PLE/QSA against dual-batch overlap and microbatching, PLE against
+pipeline parallelism, the mrope strip, and steps over its method whitelist alone, for the one method `dflash` and
+for this lane's two arch names; every other method gets the image's answer word for word, and a refusal in other
+words, or one the image has since reworded, reaches the operator rather than being swallowed.
+`flash_local_dflash2/plugin.py` registers it as a vLLM general plugin, the entry point its `.dist-info` carries,
+which vLLM's plugin loader runs in the API server before the config is built and in the engine core and every
+worker before a model is built, and only the dflash2 unit mounts the package: the MTP target is served by the
+image's hook untouched, and the two targets stay switchable.
+
+### MTP against DFlash2 at depth 3: what is measured, and what is not
+
+| `./bench.sh` probe, batch 1 decode (tok/s) | MTP, the card's head drafting 4 | DFlash2 drafting 3 |
+|---|---|---|
+| code (greedy) | 56.2-57.4 | TBD |
+| reasoning (greedy) | 52.8-54.3 | TBD |
+| math peak (temp 0.6) | 46.5-49.2 | TBD |
+| free prose (greedy, worst case, out of the median) | 33.4-35.5 | TBD |
+| **greedy median** | **55.1-55.4** | **TBD** |
+
+The MTP column is quoted, not newly measured. The per-probe ranges are the reference `bench.sh` itself prints for
+this lane (its `flash-local` entry in `HEADERS`: "reference box (2026-10-20, the lane's default effort, xhigh)"),
+whose comment cites two runs on the reference box on 2026-10-20; the greedy median is those runs as the Memory
+section above gives them, 55.4 with the allocator setting and 55.1 without it. The median `bench.sh` prints is
+taken over the greedy probes it keeps, code and reasoning: math runs at temperature 0.6 and the worst-case prose
+is left out of it.
+
+The DFlash2 column is TBD because nothing has run. No DFlash2 figure exists for this target on this box or any
+other, and none belongs in this table before `./bench.sh` has been run on it: not the 27B lane's DFlash2 rows
+(BENCHMARKS.md: another model, checkpoint, engine and drafter), not a projection from the MTP column with the
+depth changed. When it fills, it fills the way this page measures everything, and the same instrument on the same
+unit: the first batch after a boot thrown away, both targets read within one session, every figure kept with its
+date, its boot and the effort its template gave it.
+
 ## The n-gram table is read at every token: keep it on the internal disk
 
 The engine reads the table's rows at random over io_uring at every token, from the checkpoint's own
