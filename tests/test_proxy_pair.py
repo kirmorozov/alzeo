@@ -24,6 +24,7 @@ import re
 import shutil
 import socket
 import socketserver
+import select
 import ssl
 import struct
 import subprocess
@@ -45,6 +46,15 @@ TEST_REV = "1a2b3c4d5e" * 4            # the checkpoint every test box says it s
 HOP_ENDED_OPENAI = (b'data: {"id":"keepalive","object":"chat.completion.chunk","created":0,"model":"keepalive",'
                     b'"choices":[],"x_alzeo_ended":"order"}\n\n')
 HOP_ENDED_NDJSON = b'{"x_alzeo_ended": "order"}\n'      # on the Ollama routes' NDJSON
+PAIR_GRACE_READ_S = 6.0           # the 5 s an entry reads on after its client left (PAIR_ORDER_GRACE_S), and 1
+
+
+def _until(pred, secs):
+    """pred() once it holds, waited for up to secs seconds."""
+    deadline = time.monotonic() + secs
+    while not pred() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return pred()
 # What vllm 0.29.0 (the pinned image) answers when its EngineCore died: rendered from its own code on the reference box
 # (create_error_response of an EngineDeadError, by starlette's JSONResponse; a stream's event by json.dumps)
 VLLM_DEAD_500 = (b'{"error":{"message":"EngineCore encountered an issue. See stack trace (above) for the root cause.",'
@@ -177,6 +187,10 @@ def fake_engine(name, model):
         bodies: list = []           # every POST's body, parsed
         gets: list = []             # the path of every GET
         delay = 0.0
+        # set by a test's cleanup: every generation its x_delay (or delay) still holds answers now. A request
+        # held for the whole test (busy) ends with it, not seconds later (the CI's time, decision 1137)
+        release = threading.Event()
+        count_delay = 0.0           # seconds the size guard's count waits before its answer
         ordered_now = False         # "vllm_dead_late_order(_cut)": its lane's stop job, seen only once it is set
         mode = "ok"                 # "down": /v1/models answers 503 (a boot) ; "cut": a stream dies mid-way ;
                                     # "busy": every POST answers 503 ; "die": every POST is read, then the
@@ -186,7 +200,11 @@ def fake_engine(name, model):
                                     # "vllm_dead_late_order_cut": the same, then a cut, no end ;
                                     # "vllm_dead_ordered_then_cut": its death while its stop job runs, the job over
                                     # (ordered_now False) a second later, then a cut ;
-                                    # "ndjson_cut": an Ollama stream (/api/chat) cut after its first line
+                                    # "ndjson_cut": an Ollama stream (/api/chat) cut after its first line ;
+                                    # "vllm_dead_after_1s": an event a second after its first, then its death ;
+                                    # "slow_10s": five more events two seconds apart, then its end ;
+                                    # "ndjson_unended_end": an Ollama stream whose last line, a second after its
+                                    # first, has no line end, then its clean end
 
         def log_message(self, *a):
             pass
@@ -218,6 +236,7 @@ def fake_engine(name, model):
                                  self.headers.get("X-Alzeo-Pair-Hop")))
             Handler.rids.append((body.get("rid"), self.headers.get("x-override-rid")))
             if self.path == "/tokenize":            # the size guard's count: two characters a token
+                time.sleep(Handler.count_delay)
                 if Handler.mode == "count_fails":       # an engine stopping: its count says 503
                     return self.reply({"error": {"message": "stopping", "type": "server_error"}}, 503)
                 if Handler.mode == "count_dies":        # an engine that dies on the count: closed, no answer
@@ -243,10 +262,24 @@ def fake_engine(name, model):
                 self.end_headers()
                 self.wfile.write(out)
                 return
-            time.sleep(body.get("x_delay", Handler.delay))
+            # float(): a null delay fails at once, as time.sleep did, where wait(None) would wait for good (review)
+            Handler.release.wait(float(body.get("x_delay", Handler.delay)))
             if self.path.startswith("/v1/messages"):
                 return self.reply({"id": "m", "type": "message", "role": "assistant", "model": Handler.served[0],
                                    "content": [{"type": "text", "text": f"from {name}"}]})
+            if Handler.mode == "ndjson_unended_end" and self.path == "/api/chat" and body.get("stream"):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                ln = json.dumps({"model": Handler.served[0], "message": {"role": "assistant",
+                                 "content": f"{name}-0 "}, "done": False}).encode() + b"\n"
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(ln), ln)); self.wfile.flush()
+                time.sleep(1.0)
+                last = json.dumps({"model": Handler.served[0], "message": {"role": "assistant", "content": ""},
+                                   "done": True, "done_reason": "stop"}).encode()      # no line end
+                self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(last), last)); self.wfile.flush()
+                return
             if Handler.mode == "ndjson_cut" and self.path == "/api/chat" and body.get("stream"):
                 self.send_response(200)                     # an Ollama stream whose engine dies in it: cut, no end
                 self.send_header("Content-Type", "application/x-ndjson")
@@ -271,6 +304,18 @@ def fake_engine(name, model):
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(part), part)); self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n"); self.wfile.flush()
                 return
+            if Handler.mode == "slow_body" and not body.get("stream"):   # its answer in two halves, 1.5 s apart
+                out = json.dumps({"id": "c", "object": "chat.completion", "model": Handler.served[0], "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": f"from {name}"},
+                     "finish_reason": "stop"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out[:len(out) // 2]); self.wfile.flush()
+                time.sleep(1.5)
+                self.wfile.write(out[len(out) // 2:]); self.wfile.flush()
+                return
             if not body.get("stream"):
                 return self.reply({"id": "c", "object": "chat.completion", "model": Handler.served[0],
                                    "choices": [{"index": 0, "message": {"role": "assistant", "content": f"from {name}"},
@@ -285,6 +330,21 @@ def fake_engine(name, model):
                 part = f"data: {ev}\n\n".encode()
                 self.wfile.write(b"%x\r\n%s\r\n" % (len(part), part)); self.wfile.flush()
                 time.sleep(0.05)
+                if Handler.mode == "slow_10s":          # five events two seconds apart, no death (1112)
+                    for _ in range(5):
+                        time.sleep(2.0)
+                        more = b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n'
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(more), more)); self.wfile.flush()
+                    self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (14, b"data: [DONE]\n\n")); self.wfile.flush()
+                    return
+                if Handler.mode == "vllm_dead_after_1s":    # an event a second on, then its death (1112)
+                    time.sleep(1.0)
+                    more = b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n'
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(more), more)); self.wfile.flush()
+                    time.sleep(0.3)
+                    part = b"data: " + VLLM_DEAD_EVENT + b"\n\n"
+                    self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(part), part)); self.wfile.flush()
+                    return
                 if Handler.mode == "vllm_dead_stream":  # its EngineCore died during the stream: its error event
                     part = b"data: " + VLLM_DEAD_EVENT + b"\n\n"
                     self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(part), part)); self.wfile.flush()
@@ -384,6 +444,88 @@ class FakeCockpit(http.server.BaseHTTPRequestHandler):
             FakeCockpit.states.append(1)
             return self.reply(200, COCKPIT_STATE)
         self.reply(404, {"error": "not found"})
+
+
+class LateBox(http.server.BaseHTTPRequestHandler):
+    """A box that lists the 27B and reads a request, then: "close", closes the connection 1.5 s later with no answer (its
+    power, a restart of its proxy); "cut", writes the head of its answer and cuts it 1.5 s later; "silent" and
+    "cut_silent", the same but 8 s later, past the seconds an entry keeps a connection whose client left (1112);
+    "away", answers 503 1.5 s later (its engine away); "away_soon", the same once the test sets answer_now, right
+    after its client left, well before an entry's watch first looks at its client; "close_soon", "moved_soon",
+    "error_soon", "answer_soon" and "cut_soon" then: the connection closed with no answer, a 409 model_not_served, a 500
+    that is no engine's death, a whole answer, the head of an answer cut 0.2 s later."""
+    protocol_version = "HTTP/1.1"
+    how = "close"
+    got = []                            # the users of the requests it read
+    answer_now = None                   # "away_soon": set by the test when it may answer
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        out = json.dumps({"object": "list", "data": [{"id": "qwen3.8-27b"}], "x_alzeo_running": 0,
+                          "x_alzeo_running_yours": 0, "x_alzeo_revision": TEST_REV}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        self.got.append(body.get("user"))
+        if self.how in ("close_soon", "moved_soon", "error_soon", "answer_soon", "cut_soon"):
+            self.answer_now.wait(5)
+            if self.how == "cut_soon":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "1000")
+                self.end_headers()
+                self.wfile.write(b'{"id": "c", ')
+                self.wfile.flush()
+                time.sleep(0.2)
+            if self.how in ("close_soon", "cut_soon"):
+                try: self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+                self.close_connection = True
+                return
+            if self.how == "moved_soon":
+                code, out = 409, {"error": {"type": "model_not_served", "message": "another model"}}
+            elif self.how == "error_soon":
+                code, out = 500, {"error": {"type": "server_error", "message": "something else broke"}}
+            else:
+                code, out = 200, {"id": "c", "object": "chat.completion", "model": "qwen3.8-27b", "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "late"}, "finish_reason": "stop"}]}
+            raw = json.dumps(out).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        if self.how in ("away", "away_soon"):
+            if self.how == "away":
+                time.sleep(1.5)
+            else:
+                self.answer_now.wait(5)
+            out = json.dumps({"error": {"type": "engine_unavailable", "message": "away"}}).encode()
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+            return
+        if self.how.startswith("cut"):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            self.wfile.write(b'{"id": "c", ')
+            self.wfile.flush()
+        time.sleep(8.0 if self.how in ("silent", "cut_silent") else 1.5)
+        try: self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError: pass
+        self.close_connection = True
 
 
 def silent_port(test):
@@ -656,6 +798,7 @@ class PairFixture:
         self.E1.users.clear(); self.E2.users.clear(); self.E1.bodies.clear(); self.E2.bodies.clear()
         self.E1.served[:], self.E2.served[:] = list(self.MODELS[0]), list(self.MODELS[1])
         self.E1.delay = self.E2.delay = 0.0
+        self.E1.count_delay = self.E2.count_delay = 0.0
         self.E1.mode = self.E2.mode = "ok"
         self.E1.ordered_now = self.E2.ordered_now = False
         if getattr(self, "mod", None) is not None:
@@ -1274,7 +1417,7 @@ class TwoBoxesBehindOneEndpoint(PairFixture, unittest.TestCase):
         # engine generated to the end for nobody), the answer not streamed or streamed
         for stream in (False, True):
             with self.subTest(stream=stream):
-                self.E2.delay = 8.0
+                self.E2.delay = 8.0 + PAIR_GRACE_READ_S
                 gone = self.journal("spark2").count("CLIENT GONE")
                 c = http.client.HTTPConnection("127.0.0.1", self.port1, timeout=60)
                 t0 = time.monotonic()
@@ -1283,11 +1426,12 @@ class TwoBoxesBehindOneEndpoint(PairFixture, unittest.TestCase):
                           {"Content-Type": "application/json", "Authorization": f"Bearer {KEY_1}"})
                 time.sleep(1.5)
                 c.close()                           # the client leaves before the answer
-                deadline = time.monotonic() + 5.5
+                # once the seconds the entry reads on for a death are over (decision 1112)
+                deadline = time.monotonic() + 5.5 + PAIR_GRACE_READ_S
                 while self.journal("spark2").count("CLIENT GONE") <= gone and time.monotonic() < deadline:
                     time.sleep(0.1)
                 self.assertGreater(self.journal("spark2").count("CLIENT GONE"), gone, self.journal("spark2")[-600:])
-                self.assertLess(time.monotonic() - t0, 7.5, "seen before its engine answered")
+                self.assertLess(time.monotonic() - t0, 7.5 + PAIR_GRACE_READ_S, "seen before its engine answered")
 
     def test_an_answer_past_the_cap_is_refused(self):
         # an answer not streamed was read whole: a box gone wrong could fill this one's memory (review, 2026-11-03)
@@ -1990,6 +2134,11 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        if self.INPROC:
+            # no pause an earlier test left: once busy() ended a test's generations with it, a pause that test caused
+            # still ran as the next one began (1.07 s of it after
+            # test_a_box_gone_without_a_reset_holds_a_shared_request_seconds_not_ten, review of v1.44.3)
+            self.mod._PAIR_COOL.clear()
         self.until_listed("marker-27b")
 
 
@@ -2033,7 +2182,17 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
             "user": f"busy-{i}"}), kwargs={"port": port, "key": key}, daemon=True) for i in range(n)]
         for t in threads:
             t.start()
-        self.addCleanup(lambda: [t.join(30) for t in threads])
+
+        def ended():
+            # the test is over: its generations answer now, and the next test starts once they are in, as
+            # it did when they ran their whole secs (no assertion reads them past the test)
+            engine.release.set()
+            try:
+                for t in threads:
+                    t.join(30)
+            finally:
+                engine.release.clear()
+        self.addCleanup(ended)
         deadline = time.monotonic() + 10
         while sum(1 for u in engine.users if u and u.startswith("busy-")) < n:
             if time.monotonic() > deadline:
@@ -2604,7 +2763,9 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
             def do_POST(self):
                 if Base.state.get("fast"):
                     return Base.do_POST(self)
-                time.sleep(8)                                                   # it reads nothing of the body yet
+                # it reads nothing of the body yet, past the seconds this box's watch keeps the connection once its
+                # client left (decision 1112): ended sooner, its own close cut the upload, a box that does not answer
+                time.sleep(14)
         entry = self.spare_proxy("spark1-slow-read", KEY_1, peers=(("spark2", tls_peer(self, Slow)),))
         self.until_listed("marker-slow-read", port=entry)
         held = self.busy(self.E1, entry, KEY_1, "local-only", 1, 6.0)          # one here, none there: it goes there
@@ -3629,6 +3790,479 @@ class TwoBoxesServeOneModel(PairFixture, unittest.TestCase):
         self.assertIn(b"EngineCore", got.get("out", b""))
         self.assertNotIn(b"x_alzeo_ended", got["out"], "a real death relayed was then said an order")
 
+    def _left_after_its_first_event(self, tag):
+        """A stream this box sends to the other box (one generation here, none there), its client gone after the first
+        event it got: the request's fingerprint, and the generation that kept this box busy."""
+        m = self.mod
+        held = self.busy(self.E1, self.port1, KEY_1, "local-only", 1, 6.0)     # one here, none there: it goes there
+        raw = json.dumps(dict(self.turns(tag, 1)[0], stream=True)).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.port1, timeout=30)
+        c.connect()
+        c.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # it leaves with a reset
+        c.request("POST", "/v1/chat/completions", raw,
+                  {"Content-Type": "application/json", "Authorization": f"Bearer {KEY_1}"})
+        resp = c.getresponse()
+        resp.read1(65536)                       # its first event
+        resp.close()
+        c.close()                               # gone: the next event's write fails, before the death comes
+        return m.body_fingerprint(raw, "/v1/chat/completions"), held
+
+    def _left_at_once(self, tag, stream=False, after=0.3, reset=True, **extra):
+        """A request this box sends to the other box (one generation here, none there), its client gone `after` seconds
+        after sending it, with a reset (or a plain close, reset=False): the request's fingerprint, and the generation
+        that kept this box busy."""
+        m = self.mod
+        held = self.busy(self.E1, self.port1, KEY_1, "local-only", 1, 6.0)     # one here, none there: it goes there
+        raw = json.dumps(dict(self.turns(tag, 1)[0], stream=stream, **extra)).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.port1, timeout=30)
+        c.connect()
+        if reset:
+            c.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # it leaves with a reset
+        c.request("POST", "/v1/chat/completions", raw,
+                  {"Content-Type": "application/json", "Authorization": f"Bearer {KEY_1}"})
+        time.sleep(after)
+        c.close()
+        return m.body_fingerprint(raw, "/v1/chat/completions"), held
+
+    def _bound_within(self, fp, secs):
+        m = self.mod
+        deadline = time.monotonic() + secs
+        while m.killer_box(fp) is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return m.killer_box(fp)
+
+    def _the_other_box_is(self, how):
+        """spark2 a LateBox that does `how`, listed as serving the 27B: its class, whose `got` says what it read."""
+        late = type("Late", (LateBox,), {"how": how, "got": []})
+        self.repoint(tls_peer(self, late))
+        self.mod._PAIR_MODELS["spark2"] = {"ts": time.monotonic(), "models": ("qwen3.8-27b",), "rows": [],
+                                           "error": None, "answered": True, "known": ("qwen3.8-27b",),
+                                           "known_ts": time.monotonic(), "read_s": 0.01, "running": 0,
+                                           "revision": TEST_REV}
+        self.addCleanup(self.mod._PAIR_COOL.pop, "spark2", None)
+        return late
+
+    def _stopped_in_its_count(self, tag, floor, hop=False, fails=False):
+        """A long prompt this box keeps (the other box busier), a stop during its count (floor or not), the count
+        answering too long (or failing): (status, body) its client got, None when the proxy cut it. hop: sent by the
+        other box to this box's pair port."""
+        m = self.mod
+        m._POOL.update(tokens=10000, window=9990, ts=time.time())
+        self.addCleanup(m._POOL.update, tokens=None, window=None, ts=0.0)
+        key = m.UPSTREAM_API_KEY
+        self.addCleanup(setattr, m, "UPSTREAM_API_KEY", key)
+        m.UPSTREAM_API_KEY = KEY_1
+        windows, floor_state = dict(m._STOP_WINDOWS), dict(m._FLOOR)
+        self.addCleanup(lambda: (m._STOP_WINDOWS.clear(), m._STOP_WINDOWS.update(windows)))
+        self.addCleanup(lambda: (m._FLOOR.clear(), m._FLOOR.update(floor_state)))
+        if not hop:                             # a request the other box sent on is no box's to share
+            self.busy(self.E2, self.port2, KEY_2, "marker-27b", 2, 10.0)
+            self.E2.served[:] = ["qwen3.8-27b", f"marker-busy-{tag}"]
+            self.until_listed(f"marker-busy-{tag}")
+        self.E1.count_delay = 1.5
+        if fails:
+            self.E1.mode = "count_fails"
+        body = dict(self.chat("qwen3.8-27b"), user=tag, messages=[{"role": "user", "content": f"{tag} " + "count " * 12000}])
+        got = {}
+
+        def send():
+            try:
+                got["r"] = (self.tls_call(self.pport1, "/v1/chat/completions", body)[:2] if hop
+                            else self.call("/v1/chat/completions", body)[:2])
+            except (OSError, http.client.HTTPException):
+                got["r"] = None
+        th = threading.Thread(target=send, daemon=True)
+        th.start()
+        self.assertTrue(_until(lambda: any(p == "/tokenize" for p, *_ in self.E1.seen), 5), "no count was made")
+        self.assertEqual(m.stop_generations(f"this test's {'memory floor' if floor else 'Abort all'}", floor=floor)[0], 1,
+                         "the stop did not reach it")
+        th.join(30)
+        return got.get("r")
+
+    def test_a_hop_a_stop_marks_during_its_count_still_gets_its_400(self):
+        # a request the other box sent on, its count too long: the size guard's 400, which the entry serves itself on,
+        # became a 503 ended by order once a stop reached it during its count (the 4th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("this box's pool and stop are in this test's process")
+        r = self._stopped_in_its_count("conv-hop-too-long", floor=False, hop=True)
+        self.assertIsNotNone(r, "the hop's request was cut")
+        st, out = r
+        self.assertEqual(st, 400, out[:300])
+        self.assertIn(b"context_length_exceeded", out)
+
+    def test_a_request_the_floor_stops_during_its_count_is_refused_by_it_never_handed_on(self):
+        # its count too long for this box's pool, which hands it to the other box's: the floor's stop during the count is
+        # answered by the floor, with when to come back, the other box never getting it (the 4th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("this box's pool and stop are in this test's process")
+        r = self._stopped_in_its_count("conv-floor-too-long", floor=True)
+        self.assertIsNotNone(r, "a request the floor stopped was cut bare")
+        st, out = r
+        self.assertIn(st, (503, 529), out[:300])
+        self.assertIn(b"memory floor", out)
+        self.assertNotIn("conv-floor-too-long", self.E2.users, "a request the floor stopped went to the other box")
+
+    def _left_then(self, how, tag, reset=True):
+        """A shared request to a LateBox that does `how` once its client left (answer_now set right after): the box."""
+        late = self._the_other_box_is(how)
+        late.answer_now = threading.Event()
+        fp, held = self._left_at_once(tag, after=0.1, reset=reset)
+        late.answer_now.set()
+        self.addCleanup(lambda: [th.join(30) for th in held])
+        self.assertTrue(_until(lambda: f"{tag}-0" in late.got, 5), "the test needs the other box to have it")
+        return late, fp
+
+    def test_a_box_that_closes_on_a_request_as_its_client_leaves_is_read_with_its_client_gone(self):
+        # its close came within the second its client left, before the watch's first look: read as one with its client
+        # there (the 6th review of v1.44.0: no test held the immediate look of that branch)
+        if not self.INPROC:
+            self.skipTest("the journal is read in this test's process")
+        self._left_then("close_soon", "conv-entry-close-soon")
+        self.assertTrue(self.until_in_journal("spark1", "its client gone, spark2 had the request and closed the "
+                                                        "connection with no answer", within=3.0),
+                        "a close that came as its client left was read with its client there")
+
+    def test_a_refusal_as_its_client_leaves_moves_no_conversation_there(self):
+        # a 409 that came once its client had left read as served: the conversation's next turn went to the box that
+        # refused it (the 6th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the affinities are read in this test's process")
+        m = self.mod
+        before = len(m._AFFINITY.get("spark2", ()))
+        self._left_then("moved_soon", "conv-entry-moved-soon")
+        self.assertTrue(self.until_in_journal("spark1", "CLIENT GONE during pair", within=3.0))
+        time.sleep(0.3)
+        self.assertEqual(len(m._AFFINITY.get("spark2", ())), before, "a refusal after its client left moved its turns there")
+        # forgotten there, never paused: that box answered (the 7th review of v1.44.0)
+        self.assertLessEqual(m._PAIR_COOL.get("spark2", 0), time.monotonic(), "a box that answered was paused")
+
+    def test_an_error_as_its_client_leaves_keeps_the_conversation_there(self):
+        # an error that is no refusal (a 500 that is no engine's death) once its client had left: the conversation's
+        # prefix forgotten on the box that holds it in its cache, its retry placed by balance alone and prefilled again
+        # elsewhere (the 7th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the affinities are read in this test's process")
+        m = self.mod
+        before = len(m._AFFINITY.get("spark2", ()))
+        self._left_then("error_soon", "conv-entry-error-soon")
+        self.assertTrue(self.until_in_journal("spark1", "CLIENT GONE during pair", within=3.0))
+        time.sleep(0.3)
+        self.assertGreater(len(m._AFFINITY.get("spark2", ())), before, "an error after its client left moved its turns away")
+
+    def test_an_answer_cut_as_its_client_leaves_is_read_with_its_client_gone(self):
+        # the head of an answer not streamed, then its cut, within the second its client left: read with its client
+        # there, a 502 written to nobody and an upstream cut said (the 7th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the journal is read in this test's process")
+        cuts = self.journal("spark1").count("UPSTREAM CUT pair")
+        self._left_then("cut_soon", "conv-entry-cut-soon")
+        self.assertTrue(self.until_in_journal("spark1", "CLIENT GONE during pair", within=3.0),
+                        "an answer cut as its client left was read with its client there")
+        self.assertEqual(self.journal("spark1").count("UPSTREAM CUT pair"), cuts)
+
+    def test_a_whole_answer_as_its_client_leaves_goes_to_nobody(self):
+        # a whole answer that came within the second its client left, before the watch's first look: written to a
+        # client gone, said served or with no outcome (the 6th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the journal is read in this test's process")
+        gone = self.journal("spark1").count("CLIENT GONE during pair")
+        oks = self.journal("spark1").count("ok pair")
+        self._left_then("answer_soon", "conv-entry-answer-soon", reset=False)
+        self.assertTrue(_until(lambda: self.journal("spark1").count("CLIENT GONE during pair") > gone, 5),
+                        "a whole answer that came as its client left was not said gone")
+        self.assertEqual(self.journal("spark1").count("ok pair"), oks, "an answer written to nobody was said served")
+
+    def test_a_box_that_refuses_a_shared_request_as_its_client_leaves_serves_it_nowhere(self):
+        # its 503 came within the second its client left, before the watch's tick: read as a refusal with its client
+        # there, the request was served here for nobody (the 5th review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the pause is read in this test's process")
+        m = self.mod
+        self._left_then("away_soon", "conv-entry-left-away-soon")   # its refusal once its client left
+        self.assertTrue(_until(lambda: m._PAIR_COOL.get("spark2", 0) > time.monotonic(), 6),
+                        "a box that refused a shared request as its client left was not paused")
+        # its client's leaving read with the refusal: the request served nowhere, where the path of a client still there
+        # had this box serve it, cut a moment later as its client was found gone
+        self.assertTrue(self.until_in_journal("spark1", "its client left, and spark2 gets nothing", within=3.0),
+                        "the refusal was read as one with its client there")
+        self.assertFalse(self.until_in_journal("spark1", "this box serves it", within=0.5),
+                         "a request whose client left was served here")
+
+    def test_a_box_away_that_refuses_a_shared_request_after_its_client_left_is_paused(self):
+        # its 503 came once its client had left: said served, the box was neither paused nor its conversation
+        # forgotten there, its retry refused again (the 3rd review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the pause is read in this test's process")
+        m = self.mod
+        late = self._the_other_box_is("away")
+        fp, held = self._left_at_once("conv-entry-left-away")
+        self.assertTrue(_until(lambda: "conv-entry-left-away-0" in late.got, 5), "the test needs the other box to have it")
+        self.assertTrue(_until(lambda: m._PAIR_COOL.get("spark2", 0) > time.monotonic(), 6),
+                        "a box that refused a shared request after its client left was not paused")
+        self.assertIsNone(m.killer_box(fp), "a refusal was bound")
+        # its client gone first, its path pinned: with the watch late, the refusal took the path of a client still
+        # there, which pauses too and serves it here for nobody (the 4th review of v1.44.0)
+        self.assertTrue(self.until_in_journal("spark1", "its client left, and spark2 gets nothing", within=3.0))
+        self.assertNotIn("conv-entry-left-away-0", self.E1.users, "a request whose client left was served here")
+        for th in held:
+            th.join(30)
+
+    def test_a_request_a_stop_marks_during_its_count_is_never_handed_on_as_too_long(self):
+        # its count said too long for this box's pool, which hands it to the other box's (v6.52): a request a stop
+        # marked during its count went there and was served (the 3rd review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("this box's pool and stop are in this test's process")
+        m = self.mod
+        m._POOL.update(tokens=10000, window=9990, ts=time.time())
+        self.addCleanup(m._POOL.update, tokens=None, window=None, ts=0.0)
+        key = m.UPSTREAM_API_KEY
+        self.addCleanup(setattr, m, "UPSTREAM_API_KEY", key)
+        m.UPSTREAM_API_KEY = KEY_1
+        windows = dict(m._STOP_WINDOWS)
+        self.addCleanup(lambda: (m._STOP_WINDOWS.clear(), m._STOP_WINDOWS.update(windows)))
+        held = self.busy(self.E2, self.port2, KEY_2, "marker-27b", 2, 10.0)
+        self.E2.served[:] = ["qwen3.8-27b", "marker-busy-long"]
+        self.until_listed("marker-busy-long")
+        self.E1.count_delay = 1.5               # its count answers, too long, 1.5 s on
+        body = dict(self.chat("qwen3.8-27b"), user="conv-stopped-too-long",
+                    messages=[{"role": "user", "content": "stopped too long " + "count " * 12000}])
+        t = threading.Thread(target=lambda: self._quiet_call(body), daemon=True)
+        t.start()
+        self.assertTrue(_until(lambda: any(p == "/tokenize" for p, *_ in self.E1.seen), 5), "no count was made")
+        self.assertEqual(m.stop_generations("this test's Abort all", floor=False)[0], 1, "the stop did not reach it")
+        t.join(30)
+        self.assertNotIn("conv-stopped-too-long", self.E2.users, "a request a stop marked was handed to the other box")
+        self.assertTrue(self.until_in_journal("spark1", "stopped by the cockpit", within=3.0),
+                        "a request a stop marked during its count was not cut as stopped")
+        for th in held:
+            th.join(30)
+
+    def test_a_request_the_floor_stops_during_its_count_is_refused_by_the_floor(self):
+        # the floor's stop reached it during its count, which then failed: refused by the floor, with when to come
+        # back, never a bare cut (no test drove the floor's branch, the 3rd review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("this box's pool and stop are in this test's process")
+        r = self._stopped_in_its_count("conv-floor-in-count", floor=True, fails=True)
+        self.assertIsNotNone(r, "a request the floor stopped was cut bare")
+        st, out = r
+        self.assertIn(st, (503, 529), out[:300])
+        self.assertIn(b"memory floor", out)
+        self.assertNotIn("conv-floor-in-count", self.E2.users, "a request the floor stopped reached the other box")
+
+    def _quiet_call(self, body):
+        """(status, body) of a call, or (None, b"") when the proxy cut it."""
+        try:
+            st, out, _ = self.call("/v1/chat/completions", body)
+            return st, out
+        except (OSError, http.client.HTTPException):
+            return None, b""
+
+    def test_a_box_that_closes_on_a_shared_request_after_its_client_left_is_paused(self):
+        # bound as its client left, but said "served": the box that closed on it with no answer was neither paused nor
+        # its conversation forgotten there, where the same close with its client present pauses it (the 2nd review of
+        # v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the pause is read in this test's process")
+        m = self.mod
+        late = self._the_other_box_is("close")
+        fp, held = self._left_at_once("conv-entry-left-pause")
+        self.assertEqual(self._bound_within(fp, 10), "spark2", "the test needs the close bound")
+        # its client gone first, its path pinned: with the watch late, the same close took the path of a client still
+        # there, which binds and pauses too (the 3rd review of v1.44.0)
+        self.assertTrue(self.until_in_journal("spark1", "its client gone, spark2 had the request and closed the "
+                                                        "connection with no answer", within=3.0))
+        self.assertTrue(_until(lambda: m._PAIR_COOL.get("spark2", 0) > time.monotonic(), 3),
+                        "a box that closed on a shared request after its client left was not paused")
+        self.assertIn("conv-entry-left-pause-0", late.got)
+        for th in held:
+            th.join(30)
+
+    def test_an_ollama_stream_that_ends_whole_as_its_client_leaves_binds_nothing(self):
+        # its last line had no line end, written once the stream had ended whole; its write failed, its client gone,
+        # and the read after it, on the connection urllib had closed, read as a cut: bound 10 minutes (the 2nd review
+        # of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        m = self.mod
+        self.E2.mode = "ndjson_unended_end"
+        held = self.busy(self.E1, self.port1, KEY_1, "local-only", 1, 6.0)     # one here, none there: it goes there
+        raw = json.dumps({"model": "qwen3.8-27b", "stream": True, "user": "conv-ollama-end-0",
+                          "messages": self.turns("conv-ollama-end", 1)[0]["messages"]}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.port1, timeout=30)
+        c.connect()
+        c.sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        c.request("POST", "/api/chat", raw, {"Content-Type": "application/json", "Authorization": f"Bearer {KEY_1}"})
+        resp = c.getresponse()
+        resp.read1(65536)                       # its first line
+        resp.close()
+        c.close()                               # gone with a reset, before its last line
+        time.sleep(PAIR_GRACE_READ_S)
+        self.assertIn("conv-ollama-end-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertIsNone(m.killer_box(m.body_fingerprint(raw, "/api/chat")),
+                          "a stream that ended whole was bound when its last line could not be written")
+        for th in held:
+            th.join(30)
+
+    def test_an_answer_that_comes_after_its_client_left_goes_to_nobody(self):
+        # an answer not streamed whose body came while its client left, within the seconds the watch keeps the
+        # connection: written to a client gone, it was said served, "ok pair" (the 2nd review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("the journal is read in this test's process")
+        gone = self.journal("spark1").count("CLIENT GONE during pair")
+        oks = self.journal("spark1").count("ok pair")
+        self.E2.mode = "slow_body"              # its head at once, its body's second half 1.5 s on
+        # a plain close: the first write after it goes through, and "ok pair" was said (a reset made it fail, the 3rd
+        # review of v1.44.0)
+        fp, held = self._left_at_once("conv-entry-left-late-200", reset=False)
+        self.assertTrue(_until(lambda: "conv-entry-left-late-200-0" in self.E2.users, 5))
+        self.assertTrue(_until(lambda: self.journal("spark1").count("CLIENT GONE during pair") > gone, 8),
+                        "an answer that came after its client left was not said gone")
+        self.assertEqual(self.journal("spark1").count("ok pair"), oks, "an answer written to nobody was said served")
+        for th in held:
+            th.join(30)
+
+    def test_a_request_a_stop_marks_during_its_count_is_cut_never_held_or_handed_on(self):
+        # the size guard's count under way when the cockpit's stop came, the count failed (its engine stopping): the
+        # stop's mark lasted through the hold that followed, or the other box took the request over, a stop's request
+        # served all the same (the 2nd review of v1.44.0)
+        if not self.INPROC:
+            self.skipTest("this box's pool and stop are in this test's process")
+        self._stopped_in_its_count("conv-stopped-in-count", floor=False, fails=True)
+        self.assertNotIn("conv-stopped-in-count", self.E2.users, "a request a stop marked reached the other box")
+        self.assertTrue(self.until_in_journal("spark1", "stopped by the cockpit", within=3.0),
+                        "a request a stop marked during its count was not cut as stopped")
+
+    def test_a_death_the_other_box_answers_after_this_boxs_client_left_is_bound(self):
+        # an answer not streamed, its client gone: the other box's engine died on it a second later, which that box
+        # answered 502 within the seconds the watch keeps the connection; read after its client left, it bound nothing,
+        # and its client's retry ran on this box's engine too (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        self.E2.mode = "die"
+        fp, held = self._left_at_once("conv-entry-left-502", x_die_after=1.5)
+        bound = self._bound_within(fp, 10)
+        self.assertIn("conv-entry-left-502-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertEqual(bound, "spark2", "a death the other box answered after this box's client left was left unbound")
+        for th in held:
+            th.join(30)
+
+    def test_a_stream_the_other_box_begins_after_this_boxs_client_left_is_read_for_a_death(self):
+        # its client gone before the other box's stream began: the entry left at its head, unread, the death that
+        # stream carried a second later (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        self.E2.mode = "vllm_dead_after_1s"
+        fp, held = self._left_at_once("conv-entry-left-late", stream=True, x_delay=1.6)
+        bound = self._bound_within(fp, 10)
+        self.assertIn("conv-entry-left-late-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertEqual(bound, "spark2", "a death in a stream begun after this box's client left was left unbound")
+        for th in held:
+            th.join(30)
+
+    def test_a_stream_whose_head_this_box_could_not_write_is_read_for_a_death(self):
+        # its client reset before the watch saw it go: the stream's head failed to reach it, and the entry left there,
+        # unread, the death the stream carried a second later (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        self.E2.mode = "vllm_dead_after_1s"
+        fp, held = self._left_at_once("conv-entry-left-head", stream=True, after=0.05, x_delay=0.5)
+        bound = self._bound_within(fp, 10)
+        self.assertIn("conv-entry-left-head-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertEqual(bound, "spark2", "a death in a stream whose head failed to reach its client was left unbound")
+        for th in held:
+            th.join(30)
+
+    def test_a_box_that_closes_on_a_request_after_its_client_left_is_bound(self):
+        # its client gone, the other box closed the connection on the request with no answer a second later (its power,
+        # a restart of its proxy): bound as when its client stays (decision 1017), its retry otherwise free to run on
+        # this box's engine (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        late = self._the_other_box_is("close")
+        fp, held = self._left_at_once("conv-entry-left-drop")
+        _until(lambda: "conv-entry-left-drop-0" in late.got, 5)
+        self.assertIn("conv-entry-left-drop-0", late.got, "the test needs the other box to have it")
+        self.assertEqual(self._bound_within(fp, 10), "spark2",
+                         "a box that closed on the request after its client left was left unbound")
+        for th in held:
+            th.join(30)
+
+    def test_an_answer_cut_after_its_client_left_is_bound(self):
+        # an answer not streamed whose head came, its client gone, then cut by the other box a second later: a death, as
+        # when its client stays (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        late = self._the_other_box_is("cut")
+        fp, held = self._left_at_once("conv-entry-left-cut")
+        _until(lambda: "conv-entry-left-cut-0" in late.got, 5)
+        self.assertIn("conv-entry-left-cut-0", late.got, "the test needs the other box to have it")
+        self.assertEqual(self._bound_within(fp, 10), "spark2", "an answer cut after its client left was left unbound")
+        for th in held:
+            th.join(30)
+
+    def _the_watch_ends_it(self, how):
+        # the other box silent past the seconds the watch keeps the connection, then ended by the watch: that end is this
+        # box's, no death (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        late = self._the_other_box_is(how)
+        fp, held = self._left_at_once(f"conv-entry-left-{how}")
+        time.sleep(PAIR_GRACE_READ_S + 2)
+        self.assertIn(f"conv-entry-left-{how}-0", late.got, "the test needs the other box to have it")
+        self.assertIsNone(self.mod.killer_box(fp), "this box ending the connection was read as a death")
+        for th in held:
+            th.join(30)
+
+    def test_the_watchs_own_end_of_a_silent_box_binds_nothing(self):
+        self._the_watch_ends_it("silent")
+
+    def test_the_watchs_own_end_of_an_answer_gone_silent_binds_nothing(self):
+        self._the_watch_ends_it("cut_silent")
+
+    def test_a_death_the_other_box_sends_after_this_boxs_client_left_is_bound(self):
+        # the other box's engine died on the request just after this box's client left, the death unrelayed: the watch
+        # shut the connection at once, the death went unread, and the request unbound, its retry free to run on this
+        # box's engine too (decision 1019; the 14th review of v1.43.0, decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        m = self.mod
+        self.E2.mode = "vllm_dead_after_1s"
+        fp, held = self._left_after_its_first_event("conv-entry-left-dead")
+        deadline = time.monotonic() + 10
+        while m.killer_box(fp) is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertIn("conv-entry-left-dead-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertEqual(m.killer_box(fp), "spark2", "a death sent after this box's client left was left unbound")
+        for th in held:
+            th.join(30)
+
+    def test_a_stream_that_ends_after_this_boxs_client_left_binds_nothing(self):
+        # read on after its client left (decision 1112), a stream that ends as streams do binds nothing
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        m = self.mod
+        self.E2.mode = "ok"
+        fp, held = self._left_after_its_first_event("conv-entry-left-ok")
+        time.sleep(PAIR_GRACE_READ_S)
+        self.assertIn("conv-entry-left-ok-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertIsNone(m.killer_box(fp), "a stream that ended as streams do was bound")
+        for th in held:
+            th.join(30)
+
+    def test_this_boxs_own_end_of_the_connection_is_no_death_of_the_other_boxs_engine(self):
+        # its client gone, seen first by the watch, which ends the connection once its grace is over: the read under way
+        # then fails, which read as the other box's engine cutting its stream, and bound the request (decision 1112)
+        if not self.INPROC:
+            self.skipTest("the binding is read in this test's process")
+        m = self.mod
+        self.E2.mode = "slow_10s"
+        fp, held = self._left_after_its_first_event("conv-entry-left-slow")
+        time.sleep(PAIR_GRACE_READ_S + 3)
+        self.assertIn("conv-entry-left-slow-0", self.E2.users, "the test needs the other box's engine to have it")
+        self.assertIsNone(m.killer_box(fp), "this box ending the connection was read as the other box's engine's death")
+        for th in held:
+            th.join(30)
+
     def test_a_cut_during_a_floor_stop_is_bound_and_no_stop_counts_it(self):
         # the cockpit's floor stop landed during the systemd read of an engine's cut: it counted the stream, cut by its
         # engine, as stopped, started the floor's episode for nothing, and the stream was left unbound, its retry free to
@@ -4643,6 +5277,81 @@ class TwoBoxesServeOneModelInProcess(TwoBoxesServeOneModel):
     def test_a_cut_during_a_floor_stop_is_bound_and_no_stop_counts_it(self):
         super().test_a_cut_during_a_floor_stop_is_bound_and_no_stop_counts_it()
 
+    def test_a_death_the_other_box_sends_after_this_boxs_client_left_is_bound(self):
+        super().test_a_death_the_other_box_sends_after_this_boxs_client_left_is_bound()
+
+    def test_a_death_the_other_box_answers_after_this_boxs_client_left_is_bound(self):
+        super().test_a_death_the_other_box_answers_after_this_boxs_client_left_is_bound()
+
+    def test_a_box_that_closes_on_a_shared_request_after_its_client_left_is_paused(self):
+        super().test_a_box_that_closes_on_a_shared_request_after_its_client_left_is_paused()
+
+    def test_a_box_away_that_refuses_a_shared_request_after_its_client_left_is_paused(self):
+        super().test_a_box_away_that_refuses_a_shared_request_after_its_client_left_is_paused()
+
+    def test_a_box_that_refuses_a_shared_request_as_its_client_leaves_serves_it_nowhere(self):
+        super().test_a_box_that_refuses_a_shared_request_as_its_client_leaves_serves_it_nowhere()
+
+    def test_a_box_that_closes_on_a_request_as_its_client_leaves_is_read_with_its_client_gone(self):
+        super().test_a_box_that_closes_on_a_request_as_its_client_leaves_is_read_with_its_client_gone()
+
+    def test_a_refusal_as_its_client_leaves_moves_no_conversation_there(self):
+        super().test_a_refusal_as_its_client_leaves_moves_no_conversation_there()
+
+    def test_an_error_as_its_client_leaves_keeps_the_conversation_there(self):
+        super().test_an_error_as_its_client_leaves_keeps_the_conversation_there()
+
+    def test_an_answer_cut_as_its_client_leaves_is_read_with_its_client_gone(self):
+        super().test_an_answer_cut_as_its_client_leaves_is_read_with_its_client_gone()
+
+    def test_a_whole_answer_as_its_client_leaves_goes_to_nobody(self):
+        super().test_a_whole_answer_as_its_client_leaves_goes_to_nobody()
+
+    def test_a_hop_a_stop_marks_during_its_count_still_gets_its_400(self):
+        super().test_a_hop_a_stop_marks_during_its_count_still_gets_its_400()
+
+    def test_a_request_the_floor_stops_during_its_count_is_refused_by_it_never_handed_on(self):
+        super().test_a_request_the_floor_stops_during_its_count_is_refused_by_it_never_handed_on()
+
+    def test_a_request_a_stop_marks_during_its_count_is_never_handed_on_as_too_long(self):
+        super().test_a_request_a_stop_marks_during_its_count_is_never_handed_on_as_too_long()
+
+    def test_a_request_the_floor_stops_during_its_count_is_refused_by_the_floor(self):
+        super().test_a_request_the_floor_stops_during_its_count_is_refused_by_the_floor()
+
+    def test_an_ollama_stream_that_ends_whole_as_its_client_leaves_binds_nothing(self):
+        super().test_an_ollama_stream_that_ends_whole_as_its_client_leaves_binds_nothing()
+
+    def test_an_answer_that_comes_after_its_client_left_goes_to_nobody(self):
+        super().test_an_answer_that_comes_after_its_client_left_goes_to_nobody()
+
+    def test_a_request_a_stop_marks_during_its_count_is_cut_never_held_or_handed_on(self):
+        super().test_a_request_a_stop_marks_during_its_count_is_cut_never_held_or_handed_on()
+
+    def test_a_stream_the_other_box_begins_after_this_boxs_client_left_is_read_for_a_death(self):
+        super().test_a_stream_the_other_box_begins_after_this_boxs_client_left_is_read_for_a_death()
+
+    def test_a_stream_whose_head_this_box_could_not_write_is_read_for_a_death(self):
+        super().test_a_stream_whose_head_this_box_could_not_write_is_read_for_a_death()
+
+    def test_a_box_that_closes_on_a_request_after_its_client_left_is_bound(self):
+        super().test_a_box_that_closes_on_a_request_after_its_client_left_is_bound()
+
+    def test_an_answer_cut_after_its_client_left_is_bound(self):
+        super().test_an_answer_cut_after_its_client_left_is_bound()
+
+    def test_the_watchs_own_end_of_a_silent_box_binds_nothing(self):
+        super().test_the_watchs_own_end_of_a_silent_box_binds_nothing()
+
+    def test_the_watchs_own_end_of_an_answer_gone_silent_binds_nothing(self):
+        super().test_the_watchs_own_end_of_an_answer_gone_silent_binds_nothing()
+
+    def test_a_stream_that_ends_after_this_boxs_client_left_binds_nothing(self):
+        super().test_a_stream_that_ends_after_this_boxs_client_left_binds_nothing()
+
+    def test_this_boxs_own_end_of_the_connection_is_no_death_of_the_other_boxs_engine(self):
+        super().test_this_boxs_own_end_of_the_connection_is_no_death_of_the_other_boxs_engine()
+
     def test_a_retry_that_bound_nothing_keeps_the_binding_a_death_before_it_made(self):
         super().test_a_retry_that_bound_nothing_keeps_the_binding_a_death_before_it_made()
 
@@ -4811,19 +5520,40 @@ class ThePairsPieces(unittest.TestCase):
         return self.mod.pair_conf()
 
     def _relayed_behind_a_frozen_client(self, n, fp=None, meanwhile=None, cut=True, tail=(), freeze=0.0,
-                                        path="/v1/chat/completions",
+                                        path="/v1/chat/completions", hop=None, frozen_at=50, until=None,
+                                        need_freeze=True, eof_delay=0.0, settle=None, abort=None, real_conn=False,
+                                        pace=0.0,
                                         event=b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n'):
         """A stream of n events relayed by a bare handler, then the event of tail if any, then its engine's cut (or its
-        end, cut=False). Its client is frozen once, at its 51st write, until the pump has read all of it, and freeze
-        seconds more: with n = 1075 the queue of 1024 events is full all that time, and the event of tail waits there to
-        be put. meanwhile(h) runs during that freeze, once the proxy took the stream out of every stop's reach, or 2 s
-        on; a BrokenPipeError it raises is the client leaving. What the relay ended with; what the client got is in
-        self.relayed. The relay gives up past 20 s of silence: a test whose end never comes fails, never hangs for the
-        hour of MAX_SILENCE_S (the 15th review of v1.43.0, 2026-11-05)."""
-        assert len(tail) <= 1, "the pump reads one event past a full queue"
+        end, cut=False). Its client is frozen once, at its 51st write, until the pump has read all of it and the proxy
+        took the stream out of every stop's reach, or 2 s on, and freeze seconds more: the pump never waits for the
+        client since v1.44.0, so the whole stream is read during the freeze, however long. meanwhile(h) runs during it,
+        and a BrokenPipeError it raises is the client leaving. frozen_at and until: another write to freeze at, and
+        what the freeze waits for instead (until(h)). eof_delay: seconds between the last event and the stream's end,
+        so that only what the pump reads in the event itself takes the stream out of reach; settle: the freeze waits
+        for the last event read and that many seconds more, not for the stream out of reach, which an end delayed less
+        than its 10 s would bring anyway. A binding's deferred reads of systemd are counted in
+        self.later, not run: run, they outlived the test and took the next one's systemd answers (the 15th review of
+        v1.43.0). What the relay ended with; what the client got is in self.relayed. The relay gives up past 20 s of
+        silence: a test whose end never comes fails, never hangs for the hour of MAX_SILENCE_S. tail: records read one
+        by one after the n events. abort: the upstream's abort (True: told); self.order says when each abort returned
+        and each close of the upstream came. real_conn: the client's connection a real socket, whose writes fail once
+        its TCP side is shut; self.finish_at: how many writes had gone when its stream was ended."""
         m = self.mod
         got, writes, read_all, frozen, errors = [], [], threading.Event(), [], []
-        self.relayed = writes
+        self.relayed, self.later, self.order, self.finish_at = writes, [], [], []
+        if real_conn:
+            mine, peer = socket.socketpair()
+            self.addCleanup(mine.close)
+            self.addCleanup(peer.close)
+            peer.setblocking(False)
+
+        def shut():
+            # its TCP side shut (shutdown from any thread): its peer reads its end
+            try:
+                return real_conn and peer.recv(1) == b""
+            except BlockingIOError:
+                return False
         silent = m.MAX_SILENCE_S
         m.MAX_SILENCE_S = 20
         self.addCleanup(setattr, m, "MAX_SILENCE_S", silent)
@@ -4838,31 +5568,40 @@ class ThePairsPieces(unittest.TestCase):
             def read1(self, size):
                 self.n += 1
                 if self.n <= n:
+                    if pace:
+                        time.sleep(pace)            # an engine that sends at its pace (pace: seconds an event)
                     return event
-                if self.n == n + 1 and tail:
-                    read_all.set()
-                    return tail[0]
+                if self.n <= n + len(tail):
+                    if self.n == n + len(tail):
+                        read_all.set()
+                    return tail[self.n - n - 1]
                 read_all.set()
+                time.sleep(eof_delay)
                 if not cut:
                     return b""                                          # the engine's stream ends
                 raise http.client.IncompleteRead(b"", 10)              # the engine dies: its stream cut
 
             def close(self):
-                pass
+                order.append("close")
+
+        order = self.order
 
         class Conn:
             def shutdown(self, how):
                 got.append("shutdown")
 
         def chunk(b):
-            if len(writes) == 50 and not frozen:
-                frozen.append(1)
-                read_all.wait(10)
+            if len(writes) == frozen_at and not frozen:
                 # the effect waited for, not a time: the pump may parse what it read later than read1 returned it
-                until = time.monotonic() + 2
-                while h in m._GENERATIONS and time.monotonic() < until:
+                ready = (lambda: until(h)) if until else (lambda: read_all.is_set() and h not in m._GENERATIONS)
+                if settle is not None:
+                    read_all.wait(10)
+                    time.sleep(settle)
+                    ready = read_all.is_set
+                deadline = time.monotonic() + 10
+                while not ready() and time.monotonic() < deadline:
                     time.sleep(0.01)
-                frozen.append(h._relay_q.full())    # what the test is about: the queue full behind its client
+                frozen.append(bool(ready()))       # what the test waited for came while its client read nothing
                 if meanwhile:
                     try:
                         meanwhile(h)
@@ -4871,25 +5610,34 @@ class ThePairsPieces(unittest.TestCase):
                     except Exception as e:          # noqa: BLE001 - said after the relay, not taken for a client gone
                         errors.append(e)
                 time.sleep(freeze)
+            if shut():
+                raise BrokenPipeError("its connection was shut")
             writes.append(b)
         h = object.__new__(m.H)
+        self.h = h
         h.path, h._t0, h._first, h._last, h._bytes = path, time.time(), None, None, 0
-        h._stop_why, h._pair_box, h._killer_fp, h._killer_bound, h._killer_before = None, None, fp, False, None
-        h._peer, h._held_sse, h.connection = "test", True, Conn()     # a stream the hold opened: no headers to write
-        h._abort_upstream = lambda why: True
+        h._stop_why, h._pair_box, h._killer_fp, h._killer_bound, h._killer_before = None, hop, fp, False, None
+        h._peer, h._held_sse, h.connection = "test", True, (mine if real_conn else Conn())  # the hold opened it
+
+        def told(why):
+            order.append("abort")
+            return True
+        h._abort_upstream = abort or told
         h._note_rid = lambda v: None
         h._scan_corruption = lambda v: False
         h._watch_tools = lambda v, a: None
+        h._unbind_if_ordered_later = lambda: self.later.append(1)
         h._chunk = chunk
-        h._finish = lambda: got.append("finish")
-        h._done = lambda outcome, quiet=False: got.append(outcome)
+        h._finish = lambda: (got.append("finish"), self.finish_at.append(len(writes)))
+        h._done = lambda outcome, quiet=False: (got.append(outcome), m._gen_discard(h))
         with m._GEN_LOCK:
             m._GENERATIONS.add(h)               # as _forward adds it
         self.addCleanup(m._gen_discard, h)
         h._relay_inner(Resp())
         if errors:
             raise errors[0]
-        self.assertEqual(frozen, [1, True], "the test needs its client frozen once, the queue full behind it")
+        if need_freeze:
+            self.assertEqual(frozen, [True], "the test needs its client frozen once, the whole stream read meanwhile")
         return got
 
     def _a_stop(self, reached):
@@ -4905,20 +5653,26 @@ class ThePairsPieces(unittest.TestCase):
             reached.append(len(targets))
         return stop
 
-    def _bindings_read_here(self):
-        """No binding of another test, and systemd's answer: no stop of the lane."""
+    def _bindings_read_here(self, ordered=False):
+        """No binding of another test, and systemd's answer: a stop of the lane when ordered["now"]."""
         m = self.mod
         m._KILLERS.clear()
         self.addCleanup(m._KILLERS.clear)
         saved = m.unit_stopping_by_order
-        m.unit_stopping_by_order = lambda: False
+        said = {"now": ordered, "reads": 0}
+
+        def read():
+            said["reads"] += 1
+            return said["now"]
+        m.unit_stopping_by_order = read
         self.addCleanup(setattr, m, "unit_stopping_by_order", saved)
+        return said
 
     def test_an_engines_cut_behind_a_client_that_reads_nothing_is_never_a_whole_answer(self):
         # the pump put the cut once, with 5 s to wait: the queue full that long behind a client that read nothing, it was
         # dropped, the end that followed went in, and the client's stream was closed as whole on a cut answer (the 12th
         # review of v1.43.0, 2026-11-05)
-        got = self._relayed_behind_a_frozen_client(1075, freeze=5.5)
+        got = self._relayed_behind_a_frozen_client(300, freeze=0.5)
         self.assertNotIn("finish", got, "a cut answer was ended as whole")
         self.assertEqual(got[-1], "UPSTREAM CUT", got)
 
@@ -4929,73 +5683,132 @@ class ThePairsPieces(unittest.TestCase):
         m = self.mod
         self._bindings_read_here()
         reached = []
-        got = self._relayed_behind_a_frozen_client(1075, fp="c" * 32, meanwhile=self._a_stop(reached))
+        got = self._relayed_behind_a_frozen_client(300, fp="c" * 32, meanwhile=self._a_stop(reached))
         self.assertEqual(reached, [0], "an engine's cut waiting behind a slow client was a stop target")
         self.assertEqual(got[-1], "UPSTREAM CUT", got)
         self.assertEqual(m.killer_box("c" * 32), "", "an engine's cut was left unbound")
+        self.assertEqual(self.later, [1], "a stop job that shows late would not undo the binding")
 
     def test_a_stream_ended_while_its_relay_writes_to_a_slow_client_is_no_stop_target(self):
         # its engine's stream over, its last events still on their way to a slow client: a stop counted it, started the
         # floor's episode for nothing, and cut the client of an answer whole at its engine (the 12th review of v1.43.0,
         # 2026-11-05)
         reached = []
-        got = self._relayed_behind_a_frozen_client(1075, meanwhile=self._a_stop(reached), cut=False, freeze=2.5)
+        got = self._relayed_behind_a_frozen_client(300, meanwhile=self._a_stop(reached), cut=False)
         self.assertEqual(reached, [0], "a stream its engine had ended was a stop target")
         self.assertEqual(got[-2:], ["finish", "ok"], got)
 
     def test_a_death_read_behind_a_client_that_reads_nothing_is_no_stop_target_and_is_bound(self):
-        # vLLM's death read by the pump, which waited to put it in a queue full behind a client that read nothing: out of
-        # a stop's reach only once the relay took it, the stop counted the dead stream, cut its client as stopped and
-        # left the death unbound (decision 1019; the 13th review of v1.43.0, 2026-11-05)
+        # vLLM's death read by the pump behind a client that read nothing: out of a stop's reach only once the relay took
+        # it, the stop counted the dead stream, cut its client as stopped and left the death unbound (decision 1019; the
+        # 13th review of v1.43.0, 2026-11-05)
         m = self.mod
         self._bindings_read_here()
         reached = []
-        got = self._relayed_behind_a_frozen_client(1075, fp="d" * 32, meanwhile=self._a_stop(reached), cut=False,
+        got = self._relayed_behind_a_frozen_client(300, fp="d" * 32, meanwhile=self._a_stop(reached), cut=False,
                                                    tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
         self.assertEqual(reached, [0], "a death the pump had read was a stop target")
         self.assertEqual(got[-1], "502 upstream", got)
         self.assertEqual(m.killer_box("d" * 32), "", "the death was left unbound")
+
+    def test_a_death_read_far_behind_a_client_that_reads_nothing_is_read_at_once(self):
+        # the same death 5,000 events into the stream: the pump waited to put the 1,076th behind a full queue of 1,024
+        # and read nothing more, the death included, until the client took some; a stop then counted the dead stream and
+        # cut it, the death never bound (the 14th review of v1.43.0, 2026-11-05)
+        m = self.mod
+        self._bindings_read_here()
+        reached = []
+        got = self._relayed_behind_a_frozen_client(5000, fp="g" * 32, meanwhile=self._a_stop(reached), cut=False,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(reached, [0], "a death 5,000 events in was a stop target")
+        self.assertEqual(got[-1], "502 upstream", got)
+        self.assertEqual(m.killer_box("g" * 32), "", "a death 5,000 events in was left unbound")
+
+    def test_a_death_whose_client_leaves_before_its_relay_gets_there_is_bound(self):
+        # vLLM's death read, its client gone before the relay reached it: bound only by the relay, it was left unbound,
+        # the client's retry free to take the other box's engine down too (decision 1019; the 13th review of v1.43.0)
+        m = self.mod
+        self._bindings_read_here()
+
+        def gone(h):
+            raise BrokenPipeError("the client left")
+        got = self._relayed_behind_a_frozen_client(300, fp="h" * 32, meanwhile=gone, cut=False,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(got[-1], "CLIENT GONE on write", got)
+        self.assertEqual(m.killer_box("h" * 32), "", "a death its client left before was left unbound")
+
+    def test_an_order_read_at_the_death_binds_nothing_however_late_its_relay_gets_there(self):
+        # the lane's stop job ran as vLLM's engine died, and was over when the relay reached the death behind a slow
+        # client: systemd read then said no order, and an ordered end was bound 10 minutes (decisions 1030 and 1041; the
+        # 14th review of v1.43.0, 2026-11-05)
+        m = self.mod
+        ordered = self._bindings_read_here(ordered=True)
+
+        def the_job_over(h):
+            ordered["now"] = False
+        # frozen once systemd was read at the death: frozen once the handler left the stop's reach, a step before that
+        # read, the job could be over before it (the review of v1.44.0)
+        got = self._relayed_behind_a_frozen_client(300, fp="i" * 32, meanwhile=the_job_over, cut=False, eof_delay=1.0,
+                                                   until=lambda h: ordered["reads"] >= 1,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(got[-1], "502 upstream", got)
+        self.assertIsNone(m.killer_box("i" * 32), "a death by order was bound once its job was over")
+
+    def test_a_real_death_stays_bound_when_a_stop_job_starts_after_its_stream(self):
+        # vLLM's engine died with no stop job, one started once its stream was over, before the relay reached the death
+        # behind a slow client: systemd read then took the real death for the order's (the 14th review of v1.43.0,
+        # 2026-11-05). Read as the death comes and at the stream's end now; a stop job within 3 s of the binding still
+        # undoes it, by the deferred reads it starts (decision 1061)
+        m = self.mod
+        ordered = self._bindings_read_here(ordered=False)
+
+        def a_job_starts_once_the_stream_is_over(h):
+            # the pump read the stream's end (systemd read at the death and at the end): waited for, not 0.3 s (the
+            # review of v1.44.0)
+            deadline = time.monotonic() + 10
+            while ordered["reads"] < 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            ordered["now"] = True
+        got = self._relayed_behind_a_frozen_client(300, fp="j" * 32, meanwhile=a_job_starts_once_the_stream_is_over,
+                                                   cut=False, tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(got[-1], "502 upstream", got)
+        self.assertEqual(m.killer_box("j" * 32), "", "a real death was unbound by a stop job that started after it")
+        self.assertEqual(self.later, [1], "the deferred reads of systemd were not started at the binding")
+
+    def test_a_client_too_slow_is_cut_and_its_generation_stopped(self):
+        # a client that reads nothing: the queue held 1,024 events and the pump waited, its engine generating on; now
+        # the spool holds up to SPOOL_MAX_BYTES, past which the generation stops and the client is cut (decision 1108)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        got = self._relayed_behind_a_frozen_client(300, cut=False, frozen_at=0, until=lambda h: h._relay_q.over,
+                                                   need_freeze=False)       # cut before its first write, or after it
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertNotIn("finish", got, "a client too slow got its stream ended as whole")
+        # its generation stopped, once: a too_slow that stopped nothing passed (the review of v1.44.0)
+        deadline = time.monotonic() + 5
+        while "abort" not in self.order and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.order.count("abort"), 1, self.order)
 
     def test_an_end_read_behind_a_client_that_reads_nothing_is_no_stop_target(self):
         # the pump read [DONE] and waited to put it in a queue full behind a client that read nothing: a stop counted an
         # answer whole at its engine, and cut its client, who generated all of it again (the 13th review of v1.43.0,
         # 2026-11-05)
         reached = []
-        got = self._relayed_behind_a_frozen_client(1075, meanwhile=self._a_stop(reached), cut=False,
+        got = self._relayed_behind_a_frozen_client(300, meanwhile=self._a_stop(reached), cut=False, eof_delay=3.0, settle=0.5,
                                                    tail=(b"data: [DONE]\n\n",))
         self.assertEqual(reached, [0], "an answer whose end the pump had read was a stop target")
         self.assertEqual(got[-2:], ["finish", "ok"], got)
         self.assertEqual(self.relayed[-1], b"data: [DONE]\n\n", "the end did not reach the client")
 
-    def test_an_end_by_order_read_behind_a_client_that_leaves_once_the_order_is_over_binds_nothing(self):
-        # a death or a cut the pump read while the lane's stop job ran, the client gone once the job was over: decided
-        # when the client was found gone, systemd read then, it was bound 10 minutes, an order binding its request
-        # (decisions 1030 and 1041; the 14th review of v1.43.0, which withdrew that decision, decision 1088)
-        m = self.mod
-        self._bindings_read_here()
-        ordered = {"now": True}
-        m.unit_stopping_by_order = lambda: ordered["now"]
-
-        def the_job_over_then_the_client_gone(h):
-            ordered["now"] = False
-            raise BrokenPipeError("the client left")
-        for name, kw in (("death", {"cut": False, "tail": (b"data: " + VLLM_DEAD_EVENT + b"\n\n",)}),
-                         ("cut", {"cut": True})):
-            with self.subTest(end=name):
-                ordered["now"] = True
-                fp = ("o" if name == "death" else "p") * 32
-                got = self._relayed_behind_a_frozen_client(1075, fp=fp, meanwhile=the_job_over_then_the_client_gone,
-                                                           **kw)
-                self.assertEqual(got[-1], "CLIENT GONE on write", got)
-                self.assertIsNone(m.killer_box(fp), f"a {name} by order was bound once its client left")
-
     def test_an_anthropic_end_read_behind_a_client_that_reads_nothing_is_no_stop_target(self):
-        # message_stop, the end of the Anthropic dialect Claude Code reads, read by the pump and waiting to be put in a
-        # queue full behind a client that read nothing: no test reached its branch (the 14th review of v1.43.0,
-        # 2026-11-05)
+        # message_stop, the end of the Anthropic dialect Claude Code reads, read by the pump behind a client that read
+        # nothing: no test reached its branch (the 14th review of v1.43.0, 2026-11-05)
         reached = []
         got = self._relayed_behind_a_frozen_client(
-            1075, meanwhile=self._a_stop(reached), cut=False, path="/v1/messages",
+            300, meanwhile=self._a_stop(reached), cut=False, eof_delay=3.0, settle=0.5, path="/v1/messages",
             event=b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
                   b'"delta":{"type":"text_delta","text":"x"}}\n\n',
             tail=(b'event: message_stop\ndata: {"type":"message_stop"}\n\n',))
@@ -5003,6 +5816,833 @@ class ThePairsPieces(unittest.TestCase):
         self.assertEqual(got[-2:], ["finish", "ok"], got)
         self.assertEqual(self.relayed[-1], b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
                          "the end did not reach the client")
+
+    def test_a_responses_end_read_behind_a_client_that_reads_nothing_is_no_stop_target(self):
+        # /v1/responses ends with response.completed and no [DONE] (SGLang 0.5.22, vLLM 0.29): its end was never read
+        # as one, and a stop cut an answer whole at its engine behind a slow client (the 14th review of v1.43.0)
+        reached = []
+        got = self._relayed_behind_a_frozen_client(
+            300, meanwhile=self._a_stop(reached), cut=False, eof_delay=3.0, settle=0.5, path="/v1/responses",
+            event=b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"x"}\n\n',
+            tail=(b'event: response.completed\ndata: {"type":"response.completed"}\n\n',))
+        self.assertEqual(reached, [0], "a Responses answer whose end the pump had read was a stop target")
+        self.assertEqual(got[-2:], ["finish", "ok"], got)
+
+    def test_vllms_death_on_its_anthropic_route_is_recognised_when_its_engine_is_gone(self):
+        # vLLM 0.29's Anthropic route says its engine's death as the chat event it could not read, an error event
+        # without "EngineCore": never recognised, never bound (the 14th and 15th reviews of v1.43.0, 2026-11-05)
+        m = self.mod
+        self._bindings_read_here()
+        death = (b'event: error\ndata: {"type":"error","error":{"type":"internal_error","message":"1 validation error '
+                 b'for ChatCompletionStreamResponse\\nid\\n  Field required [type=missing, input_value={\'error\': '
+                 b'{\'message\': \'En...ode\': 500}}, input_type=dict]"}}\n\n')
+        anthropic = b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,' \
+                    b'"delta":{"type":"text_delta","text":"x"}}\n\n'
+        answers = m.engine_answers
+        self.addCleanup(setattr, m, "engine_answers", answers)
+        asked = []
+        for gone in (True, False):
+            with self.subTest(engine_gone=gone):
+                m._KILLERS.clear()
+                m.engine_answers = lambda path=None: (asked.append(path), not gone)[1]
+                fp = ("k" if gone else "l") * 32
+                got = self._relayed_behind_a_frozen_client(300, fp=fp, cut=False, path="/v1/messages", event=anthropic,
+                                                           tail=(death,))
+                self.assertEqual(got[-1], "502 upstream" if gone else "ok", got)
+                self.assertEqual(m.killer_box(fp), "" if gone else None)
+        # vLLM's /health: on the info route a pool read had not set yet, its 404 said the engine answered (the review)
+        self.assertEqual(asked, ["/health", "/health"])
+
+    def test_the_stop_says_a_stream_whose_end_was_read_is_finishing(self):
+        # an answer whole at its engine, still going out to a slow client: out of the stop's reach, it was neither
+        # stopped nor finishing, and the cockpit said no generation ran (the 13th to 15th reviews of v1.43.0)
+        m = self.mod
+        seen = []
+        self._relayed_behind_a_frozen_client(300, meanwhile=lambda h: seen.append(h in m._FINISHING), cut=False,
+                                             tail=(b"data: [DONE]\n\n",))
+        self.assertEqual(seen, [True], "a stream whose end was read was not said finishing")
+        self.assertEqual(len(m._FINISHING), 0, "a stream done was still said finishing")
+
+    def test_a_floor_that_lands_during_an_abort_all_holds_new_generations_back(self):
+        # an Abort all, then the floor while its generation still runs: the floor reaches it again and holds new
+        # generations back, SGLang answering abort_all before its scheduler frees anything. As v1.43.0 has it: the 15th
+        # review of v1.43.0 called it a double count, v1.44.0's three reviews disagreed, and the box's behaviour is
+        # kept until it is decided
+        m = self.mod
+        upstream = m.UPSTREAM
+        m.UPSTREAM = "http://127.0.0.1:9"       # no engine: the stop's abort_all is refused at once, nothing aborted
+        self.addCleanup(setattr, m, "UPSTREAM", upstream)
+        self._a_stops_state_given_back()
+        h = object.__new__(m.H)
+        h._stop_why, h._relay_q, h._peer = None, None, "test"
+        h._upstream_sock = lambda: None
+        h._stop_waiting = lambda: None
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        self.assertEqual(m.stop_generations("this test's Abort all", floor=False)[0], 1)
+        self.assertIsNone(m.floor_refusal(), "an operator's stop held new generations back")
+        self.assertEqual(m.stop_generations("this test's memory floor", floor=True)[0], 1,
+                         "the floor did not reach a generation still running")
+        self.assertIsNotNone(m.floor_refusal(), "a floor that landed during an Abort all held nothing back")
+
+    def test_a_stop_ends_a_running_vllm_relays_upstream_at_once(self):
+        # on vLLM a stop ended a running relay's upstream only at its next event, after a write to a slow client
+        # returned, up to CLIENT_IO_S, the generation going on meanwhile (the 15th review of v1.43.0, 2026-11-05)
+        m = self.mod
+        upstream = m.UPSTREAM
+        m.UPSTREAM = "http://127.0.0.1:9"
+        self.addCleanup(setattr, m, "UPSTREAM", upstream)
+        self._a_stops_state_given_back()
+        shut = []
+        h = object.__new__(m.H)
+        h._stop_why, h._peer, h._upstream_engine = None, "test", "vllm"
+        h._relay_q = m._Spool(0)
+        h._upstream_sock = lambda: object()
+        h._stop_waiting = lambda: None
+        h._shut_upstream = lambda: shut.append(1)
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        m.stop_generations("this test's Abort all", floor=False)
+        self.assertEqual(shut, [1], "a running vLLM relay's upstream was not ended by the stop")
+
+    def test_an_ollama_streams_last_line_read_is_no_stop_target(self):
+        # its last line ("done": true) on its way to a slow client: a stop counted it, and cut a whole answer once its
+        # write returned (the 14th and 15th reviews of v1.43.0, 2026-11-05)
+        m = self.mod
+        reached, got, writes = [], [], []
+        stop = self._a_stop(reached)
+        last = b'{"model":"m","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}\n'
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "application/x-ndjson"}
+
+            def __init__(self):
+                self.lines = [b'{"model":"m","message":{"role":"assistant","content":"x"},"done":false}\n'] * 3 + [last]
+
+            def read1(self, size):
+                return self.lines.pop(0) if self.lines else b""
+
+            def close(self):
+                pass
+
+        def chunk(b):
+            if b == last:
+                stop(h)                         # the stop lands while the last line is written
+            writes.append(b)
+        h = object.__new__(m.H)
+        h.path, h._t0, h._first, h._last, h._bytes = "/api/chat", time.time(), None, None, 0
+        h.command = "POST"
+        h._stop_why, h._pair_box, h._peer, h._held_sse = None, None, "test", False
+        h._out_ndjson, h._answer_body = True, bytearray()
+        h._begin = lambda status, headers: None
+        h._chunk = chunk
+        h._finish = lambda: got.append("finish")
+        h._done = lambda outcome, quiet=False: (got.append(outcome), m._gen_discard(h))
+        h.connection = types.SimpleNamespace(shutdown=lambda how: got.append("shutdown"))
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        h._relay_inner(Resp())
+        self.assertEqual(reached, [0], "an Ollama stream whose last line was read was a stop target")
+        self.assertEqual(got[-2:], ["finish", "ok non-sse"], got)
+
+    def _a_stops_state_given_back(self):
+        """What a stop changes (the floor, the stops' windows) given back at cleanup, and the key its abort_all
+        carries this test's: ThePairsPieces gives HOME back after its import, and this machine's real key file was read
+        and sent to the test's own server (the review of v1.44.0)."""
+        m = self.mod
+        floor, key = dict(m._FLOOR), m.UPSTREAM_API_KEY
+        self.addCleanup(lambda: (m._FLOOR.clear(), m._FLOOR.update(floor)))
+        for name in ("_STOP_WINDOWS", "_STOP_WINDOW"):      # read with getattr: a proxy before v1.44.0's review has one
+            if hasattr(m, name):
+                kept = dict(getattr(m, name))
+                self.addCleanup(lambda name=name, kept=kept: (getattr(m, name).clear(), getattr(m, name).update(kept)))
+        self.addCleanup(setattr, m, "UPSTREAM_API_KEY", key)
+        m.UPSTREAM_API_KEY = "k-test-stop"      # never this machine's real key file
+
+    def _abort_all_server(self, answer):
+        """An engine whose abort_all answers what answer(n) says for its nth: (status, seconds it takes first)."""
+        m = self.mod
+        seen = []
+
+        class Aborts(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                seen.append(self.headers.get("Authorization"))
+                status, wait = answer(len(seen))
+                time.sleep(wait)
+                self.send_response(status)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Aborts)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        m.UPSTREAM = f"http://127.0.0.1:{srv.server_address[1]}"
+        return seen
+
+    def _a_stop_made(self, how):
+        """stop_generations as the cockpit's Abort all makes it, against an engine whose abort_all answers 200
+        ("goes"), 503 ("fails"), or none listening ("refused", at once): the state it changes given back."""
+        m = self.mod
+        upstream = m.UPSTREAM
+        self.addCleanup(setattr, m, "UPSTREAM", upstream)
+        self._a_stops_state_given_back()
+        self.aborts_seen = []
+        if how == "refused":
+            m.UPSTREAM = "http://127.0.0.1:9"   # no engine: abort_all refused at once, nothing aborted
+        else:
+            self.aborts_seen = self._abort_all_server(lambda n: (200 if how == "goes" else 503, 0.0))
+        return m.stop_generations("this test's Abort all", floor=False)
+
+    def _a_generation_now(self):
+        """A generation registered, then going out, as _forward makes them."""
+        m = self.mod
+        h = object.__new__(m.H)
+        h._stop_why, h._relay_q, h._peer = None, None, "test"
+        h._now_a_generation()
+        getattr(h, "_marked_if_a_stop_is_under_way", lambda: None)()   # before v1.44.0's review, marked as it registered
+        self.addCleanup(m._gen_discard, h)
+        return h
+
+    def test_a_stops_abort_all_carries_the_tests_key_never_this_machines(self):
+        # ThePairsPieces gives HOME back after its import: this machine's real key file was read and sent (the review)
+        self._a_stop_made("goes")
+        self.assertEqual(self.aborts_seen, ["Bearer k-test-stop"])
+
+    def test_a_hop_too_slow_is_told_the_order_however_long_its_box_reads_nothing(self):
+        # the other box read nothing a while (its own client paused): cut at SPOOL_CUT_WAIT_S, the order this box decided
+        # could not be written, and that box read a bare cut, bound 10 minutes (decisions 1019 and 1031, the 2nd review
+        # of v1.44.0)
+        m = self.mod
+        cap, wait = m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S
+        m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S = 4096, 0.3
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        self.addCleanup(setattr, m, "SPOOL_CUT_WAIT_S", wait)
+        got = self._relayed_behind_a_frozen_client(300, hop="spark1", cut=False, frozen_at=0, freeze=1.0,
+                                                   until=lambda h: h._relay_q.over, need_freeze=False, real_conn=True)
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertIn(b"x_alzeo_ended", b"".join(self.relayed), "the other box was not told the order")
+
+    def test_a_hop_too_slow_after_a_death_by_order_says_the_order(self):
+        # the pump read its engine's death while its lane's stop ran: the order put before the death, still in the
+        # spool when it went over, was never said, and the other box bound an ordered end (the 2nd review of v1.44.0)
+        m = self.mod
+        self._bindings_read_here(ordered=True)
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        more = b'data: {"choices":[{"index":0,"delta":{"content":"' + b"y" * 5000 + b'"}}]}\n\n'
+        got = self._relayed_behind_a_frozen_client(1, hop="spark1", cut=False, frozen_at=0,
+                                                   until=lambda h: h._relay_q.over, need_freeze=False,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n", more))
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertIn(b"x_alzeo_ended", b"".join(self.relayed), "an order put before a death by order was lost")
+
+    def test_a_stop_during_the_death_probe_never_takes_the_death(self):
+        # vLLM's Anthropic death is probed on /health, up to 10 s: a stop during the probe marked the dying stream, and
+        # its death reached its client as a stop, unbound; out of every stop's reach before the probe, nothing in the
+        # pump proved it (the 2nd review of v1.44.0)
+        m = self.mod
+        self._bindings_read_here()
+        answers = m.engine_answers
+        self.addCleanup(setattr, m, "engine_answers", answers)
+        reached = []
+
+        def a_stop_during_the_probe(path=None):
+            with m._GEN_LOCK:
+                targets = [x for x in m._GENERATIONS if not getattr(x, "_stop_why", None)]
+                for x in targets:
+                    x._mark_stopped("this test's memory floor", True)
+            reached.append(len(targets))
+            return False                        # its engine gone
+        m.engine_answers = a_stop_during_the_probe
+        death = (b'event: error\ndata: {"type":"error","error":{"type":"internal_error","message":"1 validation error '
+                 b'for ChatCompletionStreamResponse"}}\n\n')
+        got = self._relayed_behind_a_frozen_client(
+            300, fp="q" * 32, cut=False, path="/v1/messages", tail=(death,),
+            event=b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                  b'"delta":{"type":"text_delta","text":"x"}}\n\n')
+        self.assertEqual(reached, [0], "a stop during the probe reached the dying stream")
+        self.assertEqual(got[-1], "502 upstream", got)
+        self.assertEqual(m.killer_box("q" * 32), "", "a death probed during a stop was not bound")
+
+    def test_a_failed_responses_stream_is_never_said_finishing(self):
+        # response.failed, then its engine's end: read at its end as no whole answer, then said finishing at its EOF
+        # (the 2nd review of v1.44.0)
+        m = self.mod
+        seen = []
+        self._relayed_behind_a_frozen_client(
+            300, meanwhile=lambda h: seen.append(h in m._FINISHING), cut=False, settle=0.5, path="/v1/responses",
+            event=b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"x"}\n\n',
+            tail=(b'event: response.failed\ndata: {"type":"response.failed"}\n\n',))
+        self.assertEqual(seen, [False], "a failed stream was said finishing at its end")
+
+    def test_a_hops_stream_its_engine_aborted_says_the_order(self):
+        # an abort this proxy did not make (an abort_all the cockpit sent straight, SGLang's own): cut bare, the other
+        # box read its engine's death and bound it 10 minutes (the 2nd review of v1.44.0)
+        self._bindings_read_here()
+        aborted = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"abort"}]}\n\n'
+        got = self._relayed_behind_a_frozen_client(10, hop="spark1", cut=False, frozen_at=-1, need_freeze=False,
+                                                   tail=(aborted,))
+        self.assertEqual(got[-1], "UPSTREAM ABORTED", got)
+        self.assertIn(b"x_alzeo_ended", b"".join(self.relayed), "the other box was not told the abort binds nothing")
+
+    def test_a_stopped_stream_whose_engine_knows_no_rid_is_drained(self):
+        # a stream a stop marked before its relay began, its abort refused for want of a rid: closed, its engine
+        # generated on for nobody (sglang#35255); drained, as drop_upstream does (the 2nd review of v1.44.0)
+        m = self.mod
+        done, drained, order = [], [], []
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def close(self):
+                order.append("close")
+        h = object.__new__(m.H)
+        h.path, h._peer, h._stop_why = "/v1/chat/completions", "test", "this test's Abort all"
+        h._abort_upstream = lambda why: False
+        h._drain_detached = lambda resp: drained.append(1)
+        h._cut_stopped = lambda: done.append("cut")
+        h._relay_inner(Resp())
+        self.assertEqual(done, ["cut"])
+        self.assertEqual((drained, order), ([1], []), "a stopped stream whose engine knows no rid was closed, not drained")
+
+    def test_a_client_too_slow_in_a_keepalive_write_is_cut_too_slow(self):
+        # its relay in a keepalive's write when the spool went over: said gone, not too slow, and drop_upstream ran a
+        # second time, its drain begun again (the 2nd review of v1.44.0)
+        m = self.mod
+        cap, wait, ka = m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S, m.KEEPALIVE_S
+        m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S, m.KEEPALIVE_S = 4096, 0.3, 0.2
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        self.addCleanup(setattr, m, "SPOOL_CUT_WAIT_S", wait)
+        self.addCleanup(setattr, m, "KEEPALIVE_S", ka)
+        got, in_ka = [], threading.Event()
+        mine, peer = socket.socketpair()
+        self.addCleanup(mine.close)
+        self.addCleanup(peer.close)
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def read1(self, size):
+                in_ka.wait(10)                  # quiet until its relay is in a keepalive's write
+                return b'data: {"choices":[{"index":0,"delta":{"content":"' + b"z" * 200 + b'"}}]}\n\n'
+
+            def close(self):
+                pass
+
+        def chunk(b):
+            if b == m.KA_OPENAI:
+                in_ka.set()
+                if not select.select([peer], [], [], 8)[0] or peer.recv(1) != b"":
+                    raise AssertionError("never unblocked")
+                raise BrokenPipeError("shut")
+        h = object.__new__(m.H)
+        h.path, h._t0, h._first, h._last, h._bytes = "/v1/chat/completions", time.time(), None, None, 0
+        h._stop_why, h._pair_box, h._killer_fp, h._killer_bound, h._killer_before = None, None, None, False, None
+        h._peer, h._held_sse, h.connection = "test", True, mine
+        h._abort_upstream = lambda why: True
+        h._note_rid = lambda v: None
+        h._scan_corruption = lambda v: False
+        h._watch_tools = lambda v, a: None
+        h._chunk = chunk
+        h._finish = lambda: got.append("finish")
+        h._done = lambda outcome, quiet=False: (got.append(outcome), m._gen_discard(h))
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        h._relay_inner(Resp())
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+
+    def test_a_stops_window_stays_open_while_its_abort_all_answers(self):
+        # its window was ABORT_TIMEOUT_S + 2 s from its start, the abort_all's timeout bounding the connection and each
+        # read apart: a slow answer outlived it, and a generation that went out then was ended by it unmarked (the 2nd
+        # review of v1.44.0)
+        m = self.mod
+        upstream, timeout = m.UPSTREAM, m.ABORT_TIMEOUT_S
+        self.addCleanup(setattr, m, "UPSTREAM", upstream)
+        self.addCleanup(setattr, m, "ABORT_TIMEOUT_S", timeout)
+        self._a_stops_state_given_back()
+        m.ABORT_TIMEOUT_S = 1.0                 # a window of 3 s before the 2nd review, each read 1 s at most
+
+        class Drip(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                out = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Pad: " + b"x" * 20 + b"\r\n\r\n{}"
+                for i in range(len(out)):       # a byte every 0.1 s: each read well within its 1 s, about 7 s in all
+                    self.wfile.write(out[i:i + 1])
+                    self.wfile.flush()
+                    time.sleep(0.1)
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        m.UPSTREAM = f"http://127.0.0.1:{srv.server_address[1]}"
+        t = threading.Thread(target=m.stop_generations, args=("this test's Abort all",), kwargs={"floor": False})
+        t.start()
+        self.addCleanup(t.join, 15)             # ended before the windows are given back
+        time.sleep(4.0)
+        self.assertTrue(t.is_alive(), "the test needs the abort_all still answering")
+        self.assertEqual(self._a_generation_now()._stop_why, "this test's Abort all",
+                         "a generation that went out while abort_all still answered was not the stop's")
+        t.join(10)
+
+    def test_a_stop_that_raises_still_closes_its_window(self):
+        # open until its aborts are answered (the 2nd review of v1.44.0): a stop that raised before saying its end left
+        # it open for good, every new generation cut until a restart
+        m = self.mod
+        self._a_stops_state_given_back()
+        engines = m._stop_engines
+        self.addCleanup(setattr, m, "_stop_engines", engines)
+
+        def fails(targets):
+            raise RuntimeError("can't start new thread")
+        m._stop_engines = fails
+        with self.assertRaises(RuntimeError):
+            m.stop_generations("this test's Abort all", floor=False)
+        with m._GEN_LOCK:
+            w = m._stop_window_now()
+        self.assertIsNotNone(w, "the window closed at once, the cockpit's own abort_all still to come")
+        self.assertLessEqual(w["until"], time.monotonic() + m.COCKPIT_ABORT_GRACE_S, "a stop that raised left its window open")
+
+    def test_a_drained_answers_spool_is_freed(self):
+        # its client gone, its engine knowing no rid of it: the answer drained to its end, every event queued before kept
+        # alive the drain long, up to DRAIN_MAX_S (the 4th review of v1.44.0)
+        hs = []
+
+        def leaves(h):
+            hs.append(h)
+            raise BrokenPipeError("the client left")
+        got = self._relayed_behind_a_frozen_client(300, cut=False, meanwhile=leaves, abort=lambda why: False)
+        self.assertEqual(got[-1], "CLIENT GONE on write", got)
+        self.assertEqual(hs[0]._relay_q.bytes, 0, "what waited for a client gone stayed through the drain")
+
+    def test_a_stop_wakes_an_idle_relay_with_no_keepalive(self):
+        # its relay idle, waiting for the engine's next event, when a stop lands: woken with nothing to read, it took
+        # the wake for a keepalive's silence and wrote one to the stopped client before cutting it (the 6th review);
+        # the wake marker that keeps it from that was held by no test (the 7th review of v1.44.0)
+        m = self.mod
+        reached = []
+
+        def a_stop_once_idle():
+            _until(lambda: getattr(self, "h", None) is not None and len(getattr(self, "relayed", ())) >= 20, 10)
+            time.sleep(0.3)                     # the relay waits for the engine's next event
+            self._a_stop(reached)(self.h)
+        self.h = None
+        threading.Thread(target=a_stop_once_idle, daemon=True).start()
+        self._relayed_behind_a_frozen_client(20, cut=False, eof_delay=3.0, frozen_at=-1, need_freeze=False)
+        self.assertEqual(reached, [1], "the test needs the stop to reach its idle relay")
+        self.assertNotIn(m.KA_OPENAI, self.relayed, "a stopped client got a keepalive before its cut")
+
+    def test_a_stop_frees_its_frozen_relays_spool(self):
+        # a stopped relay frozen in a write kept what waited in its spool, never written once stopped, up to
+        # SPOOL_MAX_BYTES and CLIENT_IO_S long, on the box whose memory the floor's stop defends; cleared alone, it
+        # filled again while the engine still sent (the 5th and 6th reviews of v1.44.0)
+        reached, held = [], []
+
+        def a_stop_while_frozen(h):
+            held.append(h._relay_q.bytes)
+            self._a_stop(reached)(h)
+            held.append(h._relay_q.bytes)
+            time.sleep(0.5)                     # the engine still sending
+            held.append(h._relay_q.bytes)
+        self._relayed_behind_a_frozen_client(3000, cut=False, pace=0.002, until=lambda h: h._relay_q.bytes > 10000,
+                                             meanwhile=a_stop_while_frozen)
+        self.assertEqual(reached, [1], "the test needs the stop to reach the running generation")
+        self.assertGreater(held[0], 10000, "the test needs its spool full when the stop came")
+        self.assertEqual(held[1:], [0, 0], "a stop left what waited, or let what came after fill it again")
+
+    def test_a_client_too_slows_spool_is_freed_before_its_abort(self):
+        # freed before the abort's round trip, up to ABORT_TIMEOUT_S on an engine the floor finds slow (the 4th and 5th
+        # reviews of v1.44.0)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        at_abort = []
+
+        def abort(why):
+            at_abort.append(self.h._relay_q.bytes)
+            self.order.append("abort")
+            return True
+        got = self._relayed_behind_a_frozen_client(300, cut=False, frozen_at=0, need_freeze=False, abort=abort,
+                                                   until=lambda h: h._relay_q.over)
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertEqual(at_abort, [0], "the spool was freed only after the abort's round trip")
+
+    def test_a_take_over_of_a_request_a_stop_marked_answers_it_here(self):
+        # the stop's mark read under the lock the stop marks under, where the hand-off is decided: read before it, a
+        # stop in between had the other box serve its request (the 4th and 5th reviews of v1.44.0)
+        m = self.mod
+        calls, cut = [], []
+        h = object.__new__(m.H)
+        h._peer, h._stop_why, h._hold_until, h._held_sse = "test", "this test's Abort all", None, False
+        h._pair_alt = ([{"name": "spark2"}], "qwen3.8-27b", {"name": "spark1"}, (), [], None)
+        h._forward_peer = lambda *a, **k: calls.append(1)
+        h._floor_refused = lambda: False
+        h._cut_stopped = lambda: cut.append(1)
+        self.assertTrue(h._pair_take_over(b"{}"), "a stopped request's take-over said nothing answered it")
+        self.assertEqual((calls, cut), ([], [1]), "a request a stop marked was handed to the other box")
+
+    def test_a_client_too_slows_spool_is_freed_at_once(self):
+        # what waited in the spool of a client too slow is never written: it stayed SPOOL_MAX_BYTES and more behind a
+        # hop that reads again only within CLIENT_IO_S, or a drain of up to DRAIN_MAX_S (the 3rd review of v1.44.0)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        held = []
+        got = self._relayed_behind_a_frozen_client(300, hop="spark1", cut=False, frozen_at=0, need_freeze=False,
+                                                   until=lambda h: h._relay_q.over and h._relay_q.bytes == 0,
+                                                   meanwhile=lambda h: held.append(h._relay_q.bytes), real_conn=True)
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertEqual(held, [0], "the spool of a client too slow was kept")
+
+    def test_a_stop_whose_engine_refuses_its_abort_all_keeps_no_window(self):
+        # no engine listening: the cockpit's own abort_all reaches none either, and the window open 8 s cut the requests
+        # that came then, where they waited for the engine and were served (the review of v1.44.0)
+        _, sent = self._a_stop_made("refused")
+        self.assertFalse(sent, "the test needs the proxy's abort_all refused")
+        self.assertIsNone(self._a_generation_now()._stop_why, "a generation after a stop no engine heard was stopped")
+
+    def test_two_stops_at_once_keep_each_its_window(self):
+        # the floor's stop and an operator's Abort all at once: the first to end closed the window of the other, still
+        # open for the cockpit's own abort_all (the review of v1.44.0)
+        m = self.mod
+        upstream = m.UPSTREAM
+        self.addCleanup(setattr, m, "UPSTREAM", upstream)
+        self._a_stops_state_given_back()
+        first_in, second_in = threading.Event(), threading.Event()
+
+        def answer(n):
+            # the first abort_all answers once the second came and was refused: its stop ends last, its window closed
+            if n == 1:
+                first_in.set()
+                second_in.wait(5)
+                return 200, 0.5
+            second_in.set()
+            return 503, 0.0
+        self._abort_all_server(answer)
+        first = threading.Thread(target=m.stop_generations, args=("this test's Abort all",), kwargs={"floor": False})
+        first.start()
+        self.assertTrue(first_in.wait(5), "the first stop's abort_all never came")
+        m.stop_generations("this test's memory floor", floor=True)     # refused 503: its window open 8 s more
+        first.join(10)
+        self.assertFalse(first.is_alive(), "the first stop never ended")
+        self.assertEqual(self._a_generation_now()._stop_why, "this test's memory floor",
+                         "a stop that ended closed the window of one still open")
+
+    def test_a_generation_that_registers_in_a_stops_window_is_marked_as_it_goes_out(self):
+        # marked as it registered, before the size guard: one the guard then held (its engine warming up, its count
+        # unanswered) kept the mark through its hold, up to 20 minutes, and was cut after it (the review of v1.44.0)
+        m = self.mod
+        self._a_stop_made("fails")
+        h = object.__new__(m.H)
+        h._stop_why, h._relay_q, h._peer = None, None, "test"
+        h._now_a_generation()
+        self.addCleanup(m._gen_discard, h)
+        self.assertIsNone(h._stop_why, "a generation was marked as it registered, before the size guard")
+        h._marked_if_a_stop_is_under_way()
+        self.assertEqual(h._stop_why, "this test's Abort all", "a generation going out in the stop's window was not marked")
+
+    def test_a_vllm_client_that_leaves_is_no_death_of_its_engine(self):
+        # vLLM: its client gone, the proxy shuts the upstream (closing is vLLM's abort), and the pump read the read that
+        # fails then as its engine cutting the stream, before stop was set: bound 10 minutes (decision 1019; the review
+        # of v1.44.0, 18 of 60 on loopback)
+        m = self.mod
+        self._bindings_read_here()
+        fp, shut, got, writes = "v" * 32, threading.Event(), [], []
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __init__(self):
+                self.n = 0
+
+            def read1(self, size):
+                self.n += 1
+                if self.n <= 3:
+                    return b'data: {"choices":[{"index":0,"delta":{"content":"x"}}]}\n\n'
+                shut.wait(10)
+                raise http.client.IncompleteRead(b"", 10)      # the socket this proxy shut
+
+            def close(self):
+                pass
+
+        class Conn:
+            def shutdown(self, how):
+                pass
+
+        def chunk(b):
+            if writes:
+                raise BrokenPipeError("the client left")
+            writes.append(b)
+
+        def shut_upstream():
+            shut.set()
+            time.sleep(0.3)                 # the pump reads the shut before its caller sets stop, as a slow switch has it
+        h = object.__new__(m.H)
+        h.path, h._t0, h._first, h._last, h._bytes = "/v1/chat/completions", time.time(), None, None, 0
+        h._stop_why, h._pair_box, h._killer_fp, h._killer_bound, h._killer_before = None, None, fp, False, None
+        h._peer, h._held_sse, h.connection, h._upstream_engine = "test", True, Conn(), "vllm"
+        h._shut_upstream = shut_upstream
+        h._note_rid = lambda v: None
+        h._scan_corruption = lambda v: False
+        h._watch_tools = lambda v, a: None
+        h._unbind_if_ordered_later = lambda: None
+        h._chunk = chunk
+        h._finish = lambda: got.append("finish")
+        h._done = lambda outcome, quiet=False: (got.append(outcome), m._gen_discard(h))
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        h._relay_inner(Resp())
+        time.sleep(0.5)                     # the pump's end
+        self.assertEqual(got[-1], "CLIENT GONE on write", got)
+        self.assertIsNone(m.killer_box(fp), "its client gone, the proxy's own close bound the request")
+
+    def test_a_hops_vllm_anthropic_death_is_said_so_the_entry_reads_it(self):
+        # vLLM's death on /v1/messages, said as a validation error with no EngineCore: the box that sent the request on
+        # reads a death in EngineCore or in this proxy's own words, and neither box bound it (the review of v1.44.0)
+        m = self.mod
+        self._bindings_read_here()
+        answers = m.engine_answers
+        self.addCleanup(setattr, m, "engine_answers", answers)
+        m.engine_answers = lambda path=None: False
+        death = (b'event: error\ndata: {"type":"error","error":{"type":"internal_error","message":"1 validation error '
+                 b'for ChatCompletionStreamResponse\\nid\\n  Field required [type=missing]"}}\n\n')
+        got = self._relayed_behind_a_frozen_client(
+            300, hop="spark1", cut=False, path="/v1/messages",
+            event=b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                  b'"delta":{"type":"text_delta","text":"x"}}\n\n', tail=(death,))
+        self.assertEqual(got[-1], "502 upstream", got)
+        said = b"".join(self.relayed)
+        self.assertIn(m.HOP_CLOSED_B, said, "the other box was not told its engine's death in words it reads")
+        self.assertNotIn(b"ChatCompletionStreamResponse", said)
+
+    def test_a_client_too_slow_has_its_generation_aborted_before_the_upstream_closes(self):
+        # the relay closed the upstream as soon as the spool was over, while the pump's abort was on its way: the
+        # close first, an engine without sglang#35255 dropped the state the abort needed (the review of v1.44.0)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+
+        def slow_abort(why):
+            time.sleep(0.5)                 # an abort by rid, on its way
+            self.order.append("abort")
+            return True
+        got = self._relayed_behind_a_frozen_client(300, cut=False, frozen_at=0, until=lambda h: h._relay_q.over,
+                                                   need_freeze=False, abort=slow_abort)
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        deadline = time.monotonic() + 5
+        while "abort" not in self.order and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.order[:1], ["abort"], f"the upstream closed before its abort: {self.order}")
+
+    def test_a_client_too_slow_whose_engine_knows_no_rid_has_its_answer_drained(self):
+        # no rid the engine knows: the upstream was shut with no abort, the engine generating on for nobody where it
+        # does not see a close (sglang#35255); drained instead, as drop_upstream does (the review of v1.44.0)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        shut = []
+        saved = m.H._shut_upstream
+        self.addCleanup(setattr, m.H, "_shut_upstream", saved)
+        m.H._shut_upstream = lambda h: shut.append(1)
+        n0 = len(self.lines)
+        got = self._relayed_behind_a_frozen_client(300, cut=False, frozen_at=0, until=lambda h: h._relay_q.over,
+                                                   need_freeze=False, abort=lambda why: False)
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        deadline = time.monotonic() + 5
+        while "close" not in self.order and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(shut, [], "the upstream was shut with no abort")
+        self.assertEqual(self.order, ["close"], f"the upstream closed before its answer was drained: {self.order}")
+        self.assertTrue(any("drained an abandoned" in ln for ln in self.lines[n0:]), "the answer was not drained")
+
+    def test_a_hop_too_slow_after_its_engines_death_says_no_order(self):
+        # the pump read the death, then the spool went over: the box that sent the request on was told an order, and
+        # undid the binding of a real death (the review of v1.44.0)
+        m = self.mod
+        self._bindings_read_here()
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        more = b'data: {"choices":[{"index":0,"delta":{"content":"' + b"y" * 5000 + b'"}}]}\n\n'
+        got = self._relayed_behind_a_frozen_client(1, hop="spark1", cut=False, frozen_at=0,
+                                                   until=lambda h: h._relay_q.over, need_freeze=False,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n", more))
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertNotIn(b"x_alzeo_ended", b"".join(self.relayed), "an order was said after its engine's death")
+
+    def test_an_end_over_the_spools_bound_stops_nothing(self):
+        # its end the event that went over the bound: a generation whole at its engine was aborted and its client cut,
+        # who generated all of it again (the review of v1.44.0)
+        m = self.mod
+        cap = m.SPOOL_MAX_BYTES
+        m.SPOOL_MAX_BYTES = 4096
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        end = b'event: message_stop\ndata: {"type":"message_stop","pad":"' + b"p" * 1200 + b'"}\n\n'
+        event = (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                 b'"delta":{"type":"text_delta","text":"x"}}\n\n')
+        n = 3000 // len(event)
+        got = self._relayed_behind_a_frozen_client(n, cut=False, path="/v1/messages", event=event, tail=(end,),
+                                                   frozen_at=0, settle=0.3, need_freeze=False)
+        self.assertEqual(got[-2:], ["finish", "ok"], got)
+        self.assertNotIn("abort", self.order, "a generation whole at its engine was aborted")
+
+    def test_a_dead_stream_is_never_said_finishing(self):
+        # vLLM's death, then its [DONE]: the stop said a finished answer was still going out whole (the review of
+        # v1.44.0)
+        m = self.mod
+        self._bindings_read_here()
+        seen = []
+        self._relayed_behind_a_frozen_client(300, meanwhile=lambda h: seen.append(h in m._FINISHING), cut=False,
+                                             tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n", b"data: [DONE]\n\n"))
+        self.assertEqual(seen, [False], "a dead stream was said finishing")
+
+    def test_a_decision_that_fails_in_the_pump_still_ends_the_stream(self):
+        # _engine_end raising in the pump: its 'e' never went, and the relay waited MAX_SILENCE_S, then ended the
+        # stream as whole (the review of v1.44.0)
+        m = self.mod
+        h_engine_end = m.H._engine_end
+        self.addCleanup(setattr, m.H, "_engine_end", h_engine_end)
+
+        def fails(self, put, died=False):
+            raise RuntimeError("can't start new thread")
+        m.H._engine_end = fails
+        t0 = time.monotonic()
+        got = self._relayed_behind_a_frozen_client(60, fp="w" * 32, need_freeze=False, frozen_at=-1)
+        self.assertEqual(got[-1], "UPSTREAM CUT", got)
+        self.assertLess(time.monotonic() - t0, 10, "the relay waited for an end the pump never put")
+
+    def test_a_death_whose_probe_is_slow_is_out_of_every_stops_reach_first(self):
+        # the probe of vLLM's Anthropic death takes up to 10 s: a stop during it marked the stream, and the death
+        # reached its client as a stop, unbound (the review of v1.44.0)
+        m = self.mod
+        calls = []
+        answers = m.engine_answers
+        self.addCleanup(setattr, m, "engine_answers", answers)
+        m.engine_answers = lambda path=None: calls.append("probe") or False
+        death = (b'event: error\ndata: {"type":"error","error":{"type":"internal_error","message":"1 validation error '
+                 b'for ChatCompletionStreamResponse"}}\n\n')
+        self.assertTrue(m.engine_died_in(death, lambda: calls.append("out of reach")))
+        self.assertEqual(calls, ["out of reach", "probe"])
+
+    def test_a_frozen_client_is_cut_too_slow_within_seconds(self):
+        # a client that reads nothing at all: its relay stayed in its write CLIENT_IO_S (900 s), the spool with it,
+        # and was said gone, never too slow (the review of v1.44.0)
+        m = self.mod
+        cap, wait = m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S
+        m.SPOOL_MAX_BYTES, m.SPOOL_CUT_WAIT_S = 4096, 0.5
+        self.addCleanup(setattr, m, "SPOOL_MAX_BYTES", cap)
+        self.addCleanup(setattr, m, "SPOOL_CUT_WAIT_S", wait)
+        got, in_write = [], threading.Event()
+        mine, peer = socket.socketpair()
+        self.addCleanup(mine.close)
+        self.addCleanup(peer.close)
+
+        class Resp:
+            status = 200
+            headers = {"Content-Type": "text/event-stream"}
+
+            def __init__(self):
+                self.n = 0
+
+            def read1(self, size):
+                self.n += 1
+                if self.n > 1:
+                    in_write.wait(10)       # its relay in its first write, the spool going over behind it
+                return b'data: {"choices":[{"index":0,"delta":{"content":"' + b"z" * 200 + b'"}}]}\n\n'
+
+            def close(self):
+                pass
+
+        def chunk(b):
+            in_write.set()
+            # a client that reads nothing: its write returns once its socket's TCP side is shut, its peer reading its end
+            if not select.select([peer], [], [], 8)[0] or peer.recv(1) != b"":
+                raise AssertionError("never unblocked")
+            raise BrokenPipeError("shut")
+        h = object.__new__(m.H)
+        h.path, h._t0, h._first, h._last, h._bytes = "/v1/chat/completions", time.time(), None, None, 0
+        h._stop_why, h._pair_box, h._killer_fp, h._killer_bound, h._killer_before = None, None, None, False, None
+        h._peer, h._held_sse, h.connection = "test", True, mine
+        h._abort_upstream = lambda why: True
+        h._note_rid = lambda v: None
+        h._scan_corruption = lambda v: False
+        h._watch_tools = lambda v, a: None
+        h._chunk = chunk
+        h._finish = lambda: got.append("finish")
+        h._done = lambda outcome, quiet=False: (got.append(outcome), m._gen_discard(h))
+        with m._GEN_LOCK:
+            m._GENERATIONS.add(h)
+        self.addCleanup(m._gen_discard, h)
+        t0 = time.monotonic()
+        h._relay_inner(Resp())
+        self.assertEqual(got[-1], "CLIENT TOO SLOW", got)
+        self.assertLess(time.monotonic() - t0, 5, "a frozen client kept its relay")
+
+    def test_a_hops_order_read_at_its_death_goes_before_the_death_behind_a_slow_client(self):
+        # a hop: its lane's stop read at its engine's death, the order put before the death, written so behind a
+        # client that read nothing meanwhile (decisions 1031 and 1061); no test drove a hop behind a slow client (the
+        # review of v1.44.0)
+        self._bindings_read_here(ordered=True)
+        got = self._relayed_behind_a_frozen_client(300, hop="spark1", cut=False,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(got[-1], "502 upstream", got)
+        said = b"".join(self.relayed)
+        self.assertIn(b"x_alzeo_ended", said, "the other box was not told the order")
+        self.assertLess(said.index(b"x_alzeo_ended"), said.index(b"EngineCore"), "the order came after the death")
+
+    def test_a_hops_order_seen_at_its_streams_end_is_said_before_its_end(self):
+        # a hop: no stop job at its engine's death, one at its stream's end: said before the end, behind a client that
+        # read nothing meanwhile (decision 1061, _engine_end_late)
+        ordered = self._bindings_read_here(ordered=False)
+        m = self.mod
+        saved = m.unit_stopping_by_order
+
+        def read():
+            ordered["reads"] += 1
+            return ordered["reads"] >= 2        # the read at the death says none, the one at the end says one
+        m.unit_stopping_by_order = read
+        self.addCleanup(setattr, m, "unit_stopping_by_order", saved)
+        got = self._relayed_behind_a_frozen_client(300, hop="spark1", cut=False, eof_delay=0.5,
+                                                   tail=(b"data: " + VLLM_DEAD_EVENT + b"\n\n",))
+        self.assertEqual(got[-1], "502 upstream", got)
+        orders = [i for i, w in enumerate(self.relayed) if b"x_alzeo_ended" in w]
+        self.assertTrue(orders, "the order seen at the stream's end was not said")
+        self.assertLess(orders[0], self.finish_at[0], "the order was said after the stream's end")
+
+    def test_a_generation_that_starts_while_a_stop_is_under_way_is_that_stops(self):
+        # abort_all ends every generation SGLang runs, one that started after the stop's list was made included, and the
+        # cockpit sends its own, straight to the engine, when this proxy's did not go: unmarked, SGLang ended an
+        # Anthropic stream as end_turn, whole to its client (the 15th review of v1.43.0, 2026-11-05)
+        _, sent = self._a_stop_made("fails")
+        self.assertFalse(sent, "the test needs the proxy's abort_all not to go")
+        self.assertEqual(self._a_generation_now()._stop_why, "this test's Abort all",
+                         "a generation that started while the cockpit's own abort_all could still come was not marked")
+
+    def test_a_generation_that_starts_after_a_stop_whose_abort_all_went_is_not_its(self):
+        _, sent = self._a_stop_made("goes")
+        self.assertTrue(sent, "the test needs the proxy's abort_all to go")
+        self.assertIsNone(self._a_generation_now()._stop_why, "a generation after a stop that was over was stopped")
 
     def test_what_pair_json_may_say(self):
         colons = ":".join(ident("spark3")[1][i:i + 2] for i in range(0, 64, 2)).upper()
@@ -5887,8 +7527,31 @@ class ThePairsPieces(unittest.TestCase):
         h = object.__new__(m.H)
         h._peer = "test"
         half = len(HOP_ENDED_OPENAI) // 2
-        self.assertTrue(h._order_after(Stream([HOP_ENDED_OPENAI[half:]]), None, HOP_ENDED_OPENAI[:half]))
-        self.assertFalse(h._order_after(Stream([b'data: {"choices": []}\n\n']), None, b""))
+        self.assertEqual(h._end_after(Stream([HOP_ENDED_OPENAI[half:]]), None, HOP_ENDED_OPENAI[:half]), (False, True))
+        self.assertEqual(h._end_after(Stream([b'data: {"choices": []}\n\n']), None, b""), (False, False))
+
+    def test_a_death_split_where_its_client_leaves_is_read_whole(self):
+        # read after its client left (decision 1112), a death whose first half came in the last read relayed: its SSE
+        # event, and an NDJSON line held back there
+        m = self.mod
+
+        class Stream:
+            def __init__(self, parts):
+                self.parts = list(parts)
+
+            def read1(self, n):
+                return self.parts.pop(0) if self.parts else b""
+        h = object.__new__(m.H)
+        h._peer = "test"
+        event = b'data: {"error": {"message": "keepalive-proxy: ' + m.HOP_CLOSED.encode() + b'"}}\n\n'
+        line = json.dumps({"error": {"message": "keepalive-proxy: " + m.HOP_CLOSED}}).encode() + b"\n"
+        for sse, whole, before in ((True, event, b'data: {"choices": []}\n\n'), (False, line, b'{"done": false}\n')):
+            with self.subTest(sse=sse):
+                for cut in (1, len(whole) // 2, len(whole) - 2):
+                    self.assertEqual(h._end_after(Stream([whole[cut:]]), None, before + whole[:cut], sse), (True, False),
+                                     f"a death split at byte {cut} went unread")
+                self.assertEqual(h._end_after(Stream([b'{"done": true}\n' if not sse else b"data: [DONE]\n\n"]), None,
+                                              before, sse), (False, False))
 
     def test_the_ndjson_order_line_starts_a_line_of_its_own(self):
         # after a line over 64 KiB relayed unended, the order line glued to it went unread at the entry, which bound the
@@ -6116,10 +7779,17 @@ class ThePairsPieces(unittest.TestCase):
                                  ("PAIR_SHARE_CONNECT_S", "nan", 3.0), ("PAIR_SHARE_CONNECT_S", "inf", 3.0),
                                  ("PAIR_SPREAD_COOL_S", "nan", 30.0), ("PAIR_SPREAD_COOL_S", "inf", 30.0),
                                  ("PAIR_SPREAD_COOL_S", "-5", 30.0), ("PAIR_SPREAD_COOL_S", "0", 0.0),
-                                 ("PAIR_CONNECT_S", "inf", 10.0), ("PAIR_CONNECT_S", "nan", 10.0)):
+                                 ("PAIR_CONNECT_S", "inf", 10.0), ("PAIR_CONNECT_S", "nan", 10.0),
+                                 # an empty value stopped the proxy at its start, -1 cut every stream (the review of
+                                 # v1.44.0)
+                                 ("SPOOL_MAX_BYTES", "", 32 << 20), ("SPOOL_MAX_BYTES", "nan", 32 << 20),
+                                 ("SPOOL_MAX_BYTES", "inf", 32 << 20), ("SPOOL_MAX_BYTES", "-1", 32 << 20),
+                                 ("SPOOL_MAX_BYTES", "x", 32 << 20), ("SPOOL_MAX_BYTES", "0", 0),
+                                 ("SPOOL_MAX_BYTES", "0.5", 1 << 19)):
             saved = dict(os.environ)
+            env = "PROXY_SPOOL_MAX_MIB" if name == "SPOOL_MAX_BYTES" else name
             os.environ.update({"HOME": str(self.tmp), "QWEN38_PAIR_FILE": str(self.pair_file), "PAIR_PORT": "0",
-                               "PROXY_BIND": "127.0.0.1", name: said})
+                               "PROXY_BIND": "127.0.0.1", env: said})
             try:
                 spec = importlib.util.spec_from_file_location(f"kp_pair_share_{time.time_ns()}",
                                                               REPO / "keepalive-proxy.py")

@@ -61,6 +61,183 @@ of 2048 and the non-causal block this drafter asks for. `FLASH_LOCAL_DRAFT_ATTEN
 `install-flash-local.sh` is the knob; empty leaves the choice to vLLM again. The capture plugin materializes each
 captured layer's completed state through the image's plain `hc_combine` op, which allocates its output, rather than
 the layer's workspace-bound method, so the pending triple the next layer reads is never written under it.
+## v1.44.3 (2026-11-08): the local CI starts every job, and its pair tests take 16% less time
+
+**The local CI starts every job.** ci-local.sh runs the workflow's first six jobs side by side, each in a git worktree
+of its own, then checks. It added those six worktrees side by side too, and `git worktree add` reads what the other
+adds are writing: twice on 2026-11-07, one job's add failed on another's `worktrees/<job>/commondir`. That job never
+ran, and once the others were over (51 steps, all passed, on the second run) the run ended in a Python traceback with
+no count. The worktrees are now added one after the other before any job starts, an add taking some 0.06 s on the
+reference box, and the jobs still run side by side. An add that fails is its job's failure, said and counted, and the
+other jobs run. Three tests in `tests/test_ci_local.py` fail on the old script and pass on the new one: a git that
+marks each add found an add beside another, 5 runs out of 5, and a git that cannot add a job's worktree, one of the
+first six or checks, ended the run in a traceback with no count.
+
+**The pair tests take 16% less time.** A test that keeps a generation running for its whole length (`busy()` in
+`tests/test_proxy_pair.py`) waited, at its end, for that generation's own seconds: one test took 25 s whatever its
+steps took. The fake engine now ends the generations a test held as soon as the test is over, and the next test
+starts once they are in, as before. No assertion reads them past the test. A test over sooner could leave the next
+one a pause of the other box that its seconds used to let run out: an instrumented run found one, of 1.07 s, and
+`TwoBoxesServeOneModelInProcess` now forgets any pause as each of its tests starts. On the reference box,
+`tests/test_proxy_pair.py` took 1,087.6 s before and 914.1 s after, two runs each, the same 498 tests green both ways
+(listed one by one before and after). The full local CI took 31 minutes, against 33 before.
+
+**What an update does.** The cockpit restarts: it reads the release's number in CHANGELOG.md at its start. Nothing
+else this release ships is read by an engine, the proxy or the Agent tab's opencode-web: it changes the CI and the
+tests only.
+
+**After the push.** GitHub's CI passed on f7e61d7, 89 steps, none skipped. The reference box updated in 1 min 35 s
+by the README's command (get.alzeo.ai), nothing of its owner's differing from the recommended state: the engine and
+the proxy kept running, the cockpit and the Agent tab's opencode-web restarted. On the 27B the production checks
+passed, and so did the eight real clients: Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch
+under Node and under Bun, and LiteLLM. The cockpit showed no banner on any of its views.
+
+## v1.44.2 (2026-11-07): the Qwen4 27B card opens the rack
+
+**The Qwen4 27B card opens the rack.** The card that announces the lane to come sat after the 27B it will follow. It
+comes first now, before it, on a wide screen as on a phone (Hasan, 2026-11-06).
+
+**The licences and notices have a type.** The cockpit served the six text files of its static directory, the fonts'
+and the marks' licences and the images' two notices, as application/octet-stream, a type that says nothing of what a
+file is, and a browser saves a file served so instead of showing it. It serves them as text/plain now.
+
+**v1.44.1's notes.** Its section here says what its release on GitHub says: Lobe Icons carries Qwen's new mark since its
+1.96.0 (2026-10-21), the WebP's former type is one that says nothing of what the file is, and its test checked every
+file of the static directory but the .txt and .md ones.
+
+**What an update does.** The cockpit restarts: it reads the release's number in CHANGELOG.md at its start. Nothing
+else this release ships is read by an engine, the proxy or the Agent tab's opencode-web.
+
+**Tests.** `dashboard/tests/test_page_behaviour.py`: the card opens the rack, once however often it renders, the 27B
+right after it. It fails on the cockpit of v1.44.1. `dashboard/tests/test_cockpit_http.py`: every file under the
+cockpit's static directory is served with a type, the licences and notices as text/plain. It fails on the cockpit of
+v1.44.1.
+
+**After the push.** The reference box updated at 73bf705 on 2026-11-07 with the command of this release,
+`cd ~/dgx-spark-qwen38 && curl -fsSL https://get.alzeo.ai | bash`, once GitHub's CI had passed on that commit (7 jobs,
+89 steps, none skipped) and get.alzeo.ai served its get.sh byte for byte: the run ended whole in 94 s. The cockpit
+restarted, and nothing else: the 27B, the lane that served, kept running, and so did the proxy and opencode-web; no
+unit file changed. The 8 real clients (Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch under
+Node and Bun, LiteLLM) answered through the proxy on the 27B, and the production checks passed. The cockpit showed no
+banner on any of its 5 views, with no JavaScript error, said v1.44.2, showed the Qwen4 27B card first on a wide screen
+and on a phone, and served its licences and notices as text/plain. This release changes no lane, proxy, engine or unit
+file, so no matrix ran (decision 1165).
+
+## v1.44.1 (2026-11-06): one page per model, the 27B's numbers as the lane v1.44.0 serves measured them, and Qwen's new mark in the cockpit
+
+**One page per model.** docs/models/ has a page for each model this stack serves (the 27B, the flash on SGLang, Flash
+FP4-Local, Nemotron 3.5 Bolt and Super VL, Kolibri-1, Ornith 1.5 122B, Qwen-Image 2.1 and MiniMax-H3) and an index the
+README links: the command that loads it, the numbers measured on the reference box with where their method lives, and
+what it is good at. Each figure was checked against the lane's own page, BENCHMARKS.md or the raw data of its
+campaign, and the pages say what main does today: Flash FP4-Local a lane of its own, the video's own times rather than
+the cookbook's, Super VL's KV cache at the four requests it serves, and what a plain install sets up for Kolibri, the
+image and the video. The cockpit says Flash FP4-Local reads images, and nothing in the repository showed it: on
+2026-11-06 a solid red and a solid blue image sent through the proxy came back named "Red" and "Blue", and its page
+says so.
+
+**The 27B's numbers.** The README and BENCHMARKS.md gave the 27B 71.4 tok/s on bench.sh (2026-09-17, SGLang v0.5.19,
+with torch.compile), 135-148 tok/s at 8 streams (the v1.2 battery) and GSM8K 94.0% on 200 problems (v1.2.1). They give
+what the lane v1.44.0 serves measured on 2026-11-05 (SGLang v0.5.22, without torch.compile): 65.2 and 68.5 tok/s on
+bench.sh, two runs on one boot, 44.0 tok/s alone and 80.6 in all at 4 requests on SGLang's official benchmark (8,192
+tokens in, 1,024 out), GSM8K 99.2% on 250 questions. The earlier ones stay, dated, as history (decision 1125), and
+"reproducible to the decimal across boots" is said of the August study, beside those two runs (decision 1127).
+
+**Qwen's new mark, and the Qwen4 27B card's art.** The cockpit showed Qwen's former mark, a purple star, on every Qwen
+lane: Lobe Icons, where it comes from, carries Qwen's new one since its 1.96.0 (2026-10-21), three shapes in blue,
+and the cockpit shows it now. The Qwen4 27B card, which announces the lane to come, shows an art the reference box
+made for it with its own image lane: Qwen-Image 2.1, its base model at 40 steps, turned the new mark into crystal
+glass. `dashboard/static/img/NOTICE.md` says how it was made and under which licence: the Qwen Research License grants
+the model's use for non-commercial purposes only. The card's words stand beside the art on a wide screen and over its
+darkened top on a phone, and the card no longer sits at half opacity. The cockpit serves a WebP as image/webp: it
+would have served it as application/octet-stream, a type that says nothing of what the file is.
+
+**What an update does.** The cockpit restarts: it reads the release's number in CHANGELOG.md at its start. Nothing
+else this release ships is read by an engine, the proxy or the Agent tab's opencode-web.
+
+**Tests.** `dashboard/tests/test_cockpit_http.py`: no file the page loads is served with no type,
+the card's WebP as image/webp. It fails on the cockpit of v1.44.0.
+
+**After the push.** The reference box updated at 9a4bcef on 2026-11-06 with the command of this release,
+`cd ~/dgx-spark-qwen38 && curl -fsSL https://get.alzeo.ai | bash`, once GitHub's CI had passed on that commit (7 jobs,
+89 steps, none skipped) and get.alzeo.ai served its get.sh byte for byte: the run ended whole in 97 s. The cockpit
+restarted, and nothing else: the 27B, the lane that served, kept running, and so did the proxy and opencode-web; no
+unit file changed. The 8 real clients (Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch under
+Node and Bun, LiteLLM) answered through the proxy on the 27B, and the production checks passed. The cockpit showed no
+banner on any of its 5 views, with no JavaScript error, said v1.44.1, and showed Qwen's new mark on its Qwen lanes and
+the Qwen4 27B card's art. This release changes no lane, proxy, engine or unit file, so no matrix ran (decision 1136).
+
+## v1.44.0 (2026-11-06): an answer's end is read as its engine sends it, and the 27B starts without torch.compile
+
+**The 27B lane starts without torch.compile.** Its units and run.sh started SGLang with `--enable-torch-compile
+--torch-compile-max-bs 4`. Measured on the reference box on 2026-11-05, one after the other within the hour on the
+same image (v0.5.22), three runs of the official benchmark each (8,192 tokens in, 1,024 out, medians): with it, 42.9
+tok/s at one request and 77.0 at four, and the engine ready in 371 s; without it, 44.0 and 80.6, ready in 208 s. GSM8K
+gave 0.992 without it against 0.988 with it on 250 questions, and bench.sh's short greedy prompts 65.2 and 68.5
+without it against 71.0 and 67.4 with it, spreads that overlap. It also kept the lane from SGLang v0.5.23, which
+decodes ten times slower with it at one request (3.6 against 37.3 tok/s) and as fast as v0.5.22 without it (decision
+1102). The 64 GB unit follows without a measure of its own: no 64 GB box was at hand.
+
+**An answer's end is read as its engine sends it, whatever its client's pace.** The proxy read an SSE answer from the
+engine into a queue of 1,024 events, and its reader waited when the queue was full: behind a client that read nothing,
+it read nothing more of the engine, its end included, and what the proxy decides at an engine's end (out of a stop's
+reach, the order read in systemd, the binding of decision 1019, the order told to the other box) was decided once the
+client's relay reached it, behind up to 1,024 events, as the fourteenth and fifteenth reviews of v1.43.0 found. Its
+reader never waits now: the answer waits in a spool bounded at 32 MiB (PROXY_SPOOL_MAX_MIB), past which the generation
+is stopped (read to its end unrelayed where the engine knows no id of it to abort) and the client cut within seconds,
+even one that reads nothing at all (CLIENT TOO SLOW in the journal), the other box of a pair being told it binds
+nothing once it reads again; what ends the answer, its end, a death or a cut, goes past that bound. The engine's
+death, cut or end is decided as it is read, the order read in systemd once then, and a binding's 3 s of reads started
+at once. A death or a cut is bound when its client leaves first, an order seen at the death binds nothing however late
+the relay gets there, the end of a /v1/responses stream (response.completed, .incomplete or .failed) and an Ollama
+stream's last line take it out of reach as they are read, and vLLM's death on its Anthropic route, which it says
+without the engine's words, counts as one when its engine no longer answers on /health, the box of a pair that served
+it saying it to the other box in words that box reads as a death.
+
+**A pair reads on after its client leaves.** When the client of a request this box sent to the other box left before a
+death that box sent reached it, the connection was ended at once, the death went unread, and the request was left
+unbound, its retry free to run on this box's engine too (the fourteenth review of v1.43.0, decision 1112). The entry
+reads on what the other box sends for about 5 s after every client that leaves now, streamed or not: a death there
+binds the request (its error event or its 502, a stream or an answer cut while it is read, the connection closed with
+no answer), an order or an answer its engine aborted binds nothing, and this box ending the connection at the end of
+those seconds is no death. The other box generates for nobody up to that long, the cost of reading it.
+
+**A stop reaches what it should.** A request a stop reaches while it waits in the proxy (its size guard, its engine's
+first byte) is refused or cut then, never held for its engine and cut once it is back, nor handed to the other box of
+a pair. On vLLM, a running answer's engine connection ended only at its relay's next event, after a write to a slow
+client returned, up to 900 s, the generation going on meanwhile: it ends at once. A generation that goes out while a
+stop is under way is that stop's, refused or cut as a new one is: abort_all ended it unmarked, and SGLang ends an
+aborted Anthropic stream as end_turn, its client taking the part it got for the whole answer. Each stop's window stays
+open until its abort_all is answered, closes then when it went, when the engine is vLLM, which has none, or when no
+engine listens, and stays open 8 s more when SGLang's did not go, the cockpit then sending its own. And the stop's
+answer counts as finishing a stream whose end was read and still goes out, where the cockpit said no generation ran.
+
+**What an update does.** The proxy (v6.53) and the cockpit restart. The 27B's unit changes. A box that serves the 27B
+restarts it during the update, about 3.5 minutes on the reference box, the proxy holding requests meanwhile. A box
+that serves another lane starts the 27B without torch.compile at its next Load.
+
+**Tests.** tests/test_27b_no_torch_compile.py: none of the 27B's launches (its three units and run.sh) passes either
+flag. It fails on v1.43.0. tests/test_proxy_pair.py has 72 new tests and tests/test_proxy_floor_stop.py one: the relay
+behind a client that reads nothing (its end, its death, its cut and their order read as they come, the spool's bound),
+the stops, and the pair's entry once its client left. Each one written for a defect fails on the proxy before its fix,
+the others guard against a false alarm, and 82 mutants of the new code are each caught by at least one of them.
+
+**After the push.** The reference box updated at 138df81 on 2026-11-06 with the command of this release,
+`cd ~/dgx-spark-qwen38 && curl -fsSL https://get.alzeo.ai | bash`, once GitHub's CI had passed on that commit (7 jobs,
+89 steps, none skipped) and get.alzeo.ai served its get.sh byte for byte: the run ended whole in 95 s. The proxy
+(v6.53) and the cockpit restarted. Flash FP4-Local, the lane that served, kept running, and the 27B's unit was written
+without torch.compile. The 8 real clients (Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch
+under Node and Bun, LiteLLM) answered through the proxy on Flash FP4-Local, and the production checks passed. The
+cockpit showed no banner on any of its 5 views, with no JavaScript error, and said v1.44.0. The matrix then ran the 8
+clients on each of the 7 lanes, each lane loaded as the cockpit loads it and Flash FP4-Local loaded again at the end:
+55 of 56. The one cell left, opencode on Kolibri, failed as it did in v1.40.4: the model asked to read `/hello.txt` at
+the root instead of the hello.txt of its working directory, and opencode, with no one to ask, refused that outside
+directory, the proxy having relayed the answer whole. Run again five times, it failed twice; then, Kolibri loaded once
+more, ten runs each through a proxy of v1.43.0, a proxy of this release and no proxy at all, opencode on the engine
+itself, failed 4, 3 and 1 times, every one on that same path: the model's own, without a proxy too. The 27B, loaded
+first, started without torch.compile and was ready in 218 s. Before the push, two proxies of this release, paired on
+the reference box in front of its Flash FP4-Local, passed the 8 clients through the entry: of the 16 requests the
+entry sent on, 15 came back answered, and the 16th, a request of 8.8 KB that opencode sends beside its first turn, was
+still streaming when opencode ended its run and left it, as it leaves it on one box.
 
 ## v1.43.0 (2026-11-05): two boxes that serve one model share its requests, a conversation staying on the box that holds it
 
