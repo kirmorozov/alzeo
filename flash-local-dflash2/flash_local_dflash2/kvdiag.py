@@ -14,11 +14,14 @@ B is fixed.
 
 from __future__ import annotations
 
+import logging
 import sys
 
-from vllm.logger import init_logger
-
-_logger = init_logger(__name__)
+# A child of vLLM's own "vllm" logger, so its lines come out through the engine's handlers
+# like any INFO of the image's, and the plugin imports nothing of vLLM when this module loads:
+# vLLM's plugin loader imports the package in processes that have the image, the tests in
+# ones that do not.
+_logger = logging.getLogger("vllm.flash_local_dflash2.kvdiag")
 
 _FIELDS = (
     "block_size",
@@ -149,7 +152,10 @@ def install() -> None:
             originals.setdefault(attr, original)
 
     if "create_kv_cache_views" not in originals or "prepare_kernel_block_sizes" not in originals:
-        _logger.warning("df2 kvdiag: vLLM exposes no %s; diagnostics off", " / ".join(_TARGETS))
+        _logger.warning(
+            "df2 kvdiag: vLLM exposes no %s; diagnostics off",
+            " / ".join(f"{module}.{attr}" for module, attr in _TARGETS),
+        )
         return
 
     wrappers = {

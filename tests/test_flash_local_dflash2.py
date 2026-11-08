@@ -55,6 +55,10 @@ DFLASH2_FLAGS = ("--speculative-config.method dflash "
 # the drafter's own loader, one more dotted key on the same line of the unit: the checkpoint
 # keeps b12x, the drafter's plain safetensors goes through vLLM's own loader
 DRAFT_LOAD_FLAG = " --speculative-config.draft_load_config.load_format auto"
+# the drafter's own attention backend, the last dotted key on that line: Triton takes the
+# drafter's 3008-token KV block whole, where FlashInfer wanted it split into pages of 64 that
+# the target's one allowed layout cannot view (install-flash-local.sh says the boots)
+DRAFT_ATTN_FLAG = " --speculative-config.attention_backend TRITON_ATTN"
 
 
 def pre_dflash2_render(home, hf):
@@ -178,7 +182,7 @@ class TheDflash2Target(unittest.TestCase):
         rc, out = self.box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual(rc, 0, out)
         unit = self.box.out.read_text()
-        self.assertIn("    " + DFLASH2_FLAGS.format(n=3) + DRAFT_LOAD_FLAG + " \\\n", unit)
+        self.assertIn("    " + DFLASH2_FLAGS.format(n=3) + DRAFT_LOAD_FLAG + DRAFT_ATTN_FLAG + " \\\n", unit)
         self.assertNotIn("--speculative-config.method mtp", unit)
         self.assertNotIn("num_speculative_tokens 4", unit)
         # the drafter goes through vLLM's own loader, the one flag the Nemotron lane's dflash
@@ -194,7 +198,7 @@ class TheDflash2Target(unittest.TestCase):
         self.assertNotIn("'", serve)
         self.assertNotIn("{", serve)
         self.assertNotIn("\\", serve)
-        self.assertEqual(serve.count("--speculative-config"), 5)
+        self.assertEqual(serve.count("--speculative-config"), 6)
         r = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         # and the MTP target, which loads no drafter at all, keeps the unit it had
@@ -202,6 +206,8 @@ class TheDflash2Target(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertNotIn("draft_load_config", self.box.out.read_text(),
                          "the mtp unit has no drafter to load")
+        self.assertNotIn("attention_backend", self.box.out.read_text(),
+                         "the mtp unit has no drafter whose attention it would name")
 
     def test_the_drafter_goes_through_vllms_own_loader_and_the_installer_line_names_it(self):
         # the drafter is one plain BF16 model.safetensors with no index of its own: it goes
@@ -222,7 +228,8 @@ class TheDflash2Target(unittest.TestCase):
             rc, out = box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
             self.assertEqual(rc, 0, out)
             self.assertIn("    " + DFLASH2_FLAGS.format(n=3)
-                          + " --speculative-config.draft_load_config.load_format b12x \\\n",
+                          + " --speculative-config.draft_load_config.load_format b12x"
+                          + DRAFT_ATTN_FLAG + " \\\n",
                           box.out.read_text())
         finally:
             shutil.rmtree(box.t, ignore_errors=True)
@@ -288,17 +295,39 @@ class TheDflash2Target(unittest.TestCase):
         self.assertIn("flash_local_dflash2 = flash_local_dflash2.plugin:register",
                       self.box.plugin_marker().read_text())
 
-    def test_the_drafter_group_gets_a_layer_compact_kv_layout(self):
-        """The drafter's five-layer group is only viewable under a layout that keeps a manager
-        block one dense page; the mtp target names no layout at all and vLLM resolves it."""
+    def test_the_drafter_runs_on_triton_attention_and_the_installer_line_names_it(self):
+        """The drafter's KV block is 3008 tokens, the hybrid cache's size for every attention
+        layer; FlashInfer, the image's pick, takes pages of 16, 32 or 64 on this GPU and so
+        asks to split that block, a view the target's one allowed layout (BLHNC) cannot give
+        (the boots of 2026-11-08). Triton takes the block whole. The installer's one line is
+        the knob, and nothing of the kind is forced on the container's environment any more."""
         rc, out = self.box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual(rc, 0, out)
-        lines = [ln for ln in self.box.out.read_text().splitlines() if "VLLM_KV_CACHE_LAYOUT" in ln]
-        self.assertEqual(len(lines), 1, lines)
-        self.assertTrue(lines[0].strip().startswith("-e VLLM_KV_CACHE_LAYOUT=LBNHC"), lines)
-        self.assertTrue(lines[0].endswith("\\"), lines)
+        unit = self.box.out.read_text()
+        self.assertEqual(unit.count("--speculative-config.attention_backend"), 1)
+        self.assertIn(DRAFT_ATTN_FLAG + " \\\n", unit)
+        self.assertNotIn("VLLM_KV_CACHE_LAYOUT", unit)
+        # the target's own attention backends are the image's picks, as on the mtp unit
+        self.assertNotIn("--attention-backend", unit)
+        text = (REPO / "install-flash-local.sh").read_text()
+        self.assertEqual(text.count('\nFLASH_LOCAL_DRAFT_ATTENTION_BACKEND="TRITON_ATTN"\n'), 1)
+        box = Box(without_plugin=True)
+        try:
+            shutil.copytree(PLUGIN_DIR, box.repo / "flash-local-dflash2")
+            inst = box.repo / "install-flash-local.sh"
+            inst.write_text(inst.read_text().replace(
+                '\nFLASH_LOCAL_DRAFT_ATTENTION_BACKEND="TRITON_ATTN"\n',
+                '\nFLASH_LOCAL_DRAFT_ATTENTION_BACKEND=""\n'))
+            rc, out = box.stage(FLASH_LOCAL_VARIANT="dflash2", FLASH_LOCAL_PLE_DIR="none")
+            self.assertEqual(rc, 0, out)
+            again = box.out.read_text()
+            self.assertNotIn("attention_backend", again, "an empty value leaves the choice to vLLM")
+            self.assertIn("    " + DFLASH2_FLAGS.format(n=3) + DRAFT_LOAD_FLAG + " \\\n", again)
+        finally:
+            shutil.rmtree(box.t, ignore_errors=True)
         rc, out = self.box.stage(FLASH_LOCAL_VARIANT="mtp", FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual(rc, 0, out)
+        self.assertNotIn("attention_backend", self.box.out.read_text())
         self.assertNotIn("VLLM_KV_CACHE_LAYOUT", self.box.out.read_text())
 
     def test_it_builds_in_its_own_caches(self):

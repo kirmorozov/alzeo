@@ -140,6 +140,22 @@ FLASH_LOCAL_DRAFT_GB="2"
 # vllm/utils/argparse_utils.py:408-434 of the pinned wheel). Naming "b12x" here puts the
 # drafter back on the inherited loader, should a drafter of another shape ever want it.
 FLASH_LOCAL_DRAFT_LOAD_FORMAT="auto"
+# The attention backend the drafter's own five layers run on, one more dotted key on the
+# unit's line (--speculative-config.attention_backend; the image's dflash loader hands it to
+# the drafter's config alone, v1/worker/gpu/spec_decode/dflash/utils.py:31, and the target's
+# layers keep the backends the image picks for them). Why it is not left to vLLM: left alone
+# the image picked FlashInfer for the drafter, whose kernels on this GPU take pages of 16, 32
+# or 64 tokens only, while the drafter's KV blocks are 3008 tokens, the size the hybrid cache
+# gives every attention layer so that its page equals the mamba page. A 3008-token block held
+# as 47 kernel blocks of 64 is a view that exists only when the block is one dense page, and
+# under the one layout the target's QSA layers allow (BLHNC, block outermost, its five layer
+# pages side by side) it is not: the boot died in create_kv_cache_views on 2026-11-08 ("block
+# stride 30801920 != page 6160384"), and the layout the message proposed instead, LBNHC, the
+# QSA backend refuses ("valid layouts: ['BLHNC']", the boot after). Triton attention takes any
+# block that is a multiple of 16, so the drafter's kernel block is its manager block and
+# nothing is split; it serves fp8 KV, a sliding window and the non-causal block the drafter
+# draws in, all of which this drafter asks for. Empty leaves the choice to vLLM again.
+FLASH_LOCAL_DRAFT_ATTENTION_BACKEND="TRITON_ATTN"
 MODEL="$FLASH_LOCAL_REPO"; MODEL_REV="$FLASH_LOCAL_REV"
 GMU="$FLASH_LOCAL_GMU"; WEIGHTS_GB="$FLASH_LOCAL_GB"; SEQS="$FLASH_LOCAL_SEQS"
 # Its pull at its peak: 18.2 GB unpacked and 9.7 GB to download, which the containerd image store
@@ -295,24 +311,11 @@ CACHE_DIR="$CONFIG_DIR/flash-local-cache"
 PYTHONPATH_LINE="/opt/qwen38-auth"
 PLUGIN_MOUNT=""
 DRAFT_FILES=""
-# The KV cache layout the drafter's group needs, in the container's own environment (empty:
-# vLLM resolves it, which is how the mtp unit has always run it). See the dflash2 branch.
-KV_LAYOUT_LINE=""
 if [ "$VARIANT" = dflash2 ]; then
   LM_HEAD_LINE=""
   CACHE_DIR="$CONFIG_DIR/flash-local-cache-dflash2"
   PYTHONPATH_LINE="/opt/qwen38-auth:/opt/df2-plugin"
   PLUGIN_MOUNT="--mount type=bind,source=$CONFIG_DIR/flash-local-dflash2,target=/opt/df2-plugin,readonly"
-  # Why this line exists (the boot of 2026-11-08, from the plugin's own kvdiag receipt): the
-  # drafter's attention is one group of five layers sharing one KV tensor, and vLLM resolved
-  # the layout to BLHNC, which keeps a block's five layer pages next to each other. Its own
-  # check then refuses the split that group's manager block (3008 tokens) needs into 64-token
-  # kernel blocks, because that is a valid view only when a manager block is one dense page
-  # (block stride 30801920 = 5 x 6160384, page 6160384). LBNHC hoists the layer dim out of the
-  # block, which makes a block one dense page and is the layout vLLM names in that very
-  # message. The drafter's group is what forces it; mtp keeps vLLM's own resolution, byte for
-  # byte, because its draft shares the target's groups and no group is split at all.
-  KV_LAYOUT_LINE="-e VLLM_KV_CACHE_LAYOUT=LBNHC "
   # What the check of the unit's files asks for besides the checkpoint and the table's copies:
   # the drafter's snapshot, its config and its one weights file, non-empty, in the cache the
   # unit reads, and every file of the capture plugin's copy, as the repo's folder has them (the
@@ -327,7 +330,8 @@ fi
 # What the unit's speculative config says, as this run serves it: the card's two flags under
 # mtp, byte for byte as the release before this change wrote them, and under dflash2 the same
 # dotted form, one flag per key: the method, the drafter's repo and its pinned revision, the
-# draft's length, and the drafter's loader when FLASH_LOCAL_DRAFT_LOAD_FORMAT names one. Dotted,
+# draft's length, the drafter's loader when FLASH_LOCAL_DRAFT_LOAD_FORMAT names one and its
+# attention backend when FLASH_LOCAL_DRAFT_ATTENTION_BACKEND names one. Dotted,
 # not JSON: the unit's ExecStart is one single-quoted bash -c under systemd's own quoting, and
 # a JSON there would need quotes inside quotes that this box cannot prove systemd and bash
 # hand on whole (review, 2026-11-07). The image's parser folds the dotted keys into the one
@@ -337,6 +341,9 @@ if [ "$VARIANT" = dflash2 ]; then
   SPEC_CONFIG="--speculative-config.method dflash --speculative-config.model $FLASH_LOCAL_DRAFT_REPO --speculative-config.revision $FLASH_LOCAL_DRAFT_REV --speculative-config.num_speculative_tokens $FLASH_LOCAL_DRAFT_TOKENS"
   if [ -n "$FLASH_LOCAL_DRAFT_LOAD_FORMAT" ]; then
     SPEC_CONFIG="$SPEC_CONFIG --speculative-config.draft_load_config.load_format $FLASH_LOCAL_DRAFT_LOAD_FORMAT"
+  fi
+  if [ -n "$FLASH_LOCAL_DRAFT_ATTENTION_BACKEND" ]; then
+    SPEC_CONFIG="$SPEC_CONFIG --speculative-config.attention_backend $FLASH_LOCAL_DRAFT_ATTENTION_BACKEND"
   fi
 else
   SPEC_CONFIG="--speculative-config.method mtp --speculative-config.num_speculative_tokens 4"
@@ -377,7 +384,6 @@ render_unit(){
       -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e "s|__SPEC_CONFIG__|$SPEC_CONFIG|g" \
       -e "s|__LM_HEAD_LINE__|$LM_HEAD_LINE|g" -e "s|__CACHE_DIR__|$CACHE_DIR|g" \
       -e "s|__PYTHONPATH__|$PYTHONPATH_LINE|g" -e "s|__PLUGIN_MOUNT__|$PLUGIN_MOUNT|g" \
-      -e "s|__KV_LAYOUT_LINE__|$KV_LAYOUT_LINE|g" \
       -e '/^ *\\$/d' \
       "$HERE/$UNIT.template" > "$1"
 }

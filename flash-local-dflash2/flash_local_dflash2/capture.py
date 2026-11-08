@@ -6,6 +6,8 @@ the arithmetic. model.py, which needs vLLM, binds them to the target.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 from torch import nn
 
@@ -16,10 +18,19 @@ class DFlashCaptureLayer(nn.Module):
     The target defers its hyper-connection combine between layers, so the
     completed output of this layer (the state the next one starts from)
     exists only as a pending triple until the next layer's first step
-    materializes it. Materializing it here calls the same pure combine the
-    deepstack and PP paths already use: it reads the triple and this layer's
-    combine plan, writes a new tensor, and changes nothing, so capturing
-    costs one combine and one mean per point and adds no state of its own.
+    materializes it. Materializing it here costs one combine and one mean
+    per point and adds no state of its own, provided the combine is a pure
+    function of the triple: the triple goes on to the next layer as this
+    layer returned it, so nothing the combine writes may alias it. The image's
+    deepstack and PP paths call the layer's own ``mlp_hyper_connection.combine``
+    at this very point, but they drop the triple afterwards, and under b12x
+    that method runs through the model's shared hyper-connection workspace,
+    whose output storage this wrapper cannot vouch for. ``combine`` therefore
+    names the function to use; the model hands the image's plain
+    ``hc_combine`` custom op, which allocates its output (``residual.new_empty``
+    in the image's ``qwen4_exp/amd/ops/hc.py``) and so can alias nothing. Left
+    None, the layer's own method is used, which is what the torch-only test
+    exercises.
 
     The wrapper stands in the model's layer list, so everything that reads a
     layer's attributes after the swap (the forward loop's deepstack combine,
@@ -34,9 +45,14 @@ class DFlashCaptureLayer(nn.Module):
         slot: int,
         hc_count: int,
         hidden_size: int,
+        combine: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+        | None = None,
     ) -> None:
         super().__init__()
         self.layer = layer
+        # Not an attribute nn.Module would register: a plain callable, read in
+        # forward; None means the wrapped layer's own combine (see the class).
+        self._combine = combine
         # A plain attribute, not a registered buffer: the model owns the one
         # buffer, and a second registration would put it in every wrapper's
         # state.
@@ -78,10 +94,11 @@ class DFlashCaptureLayer(nn.Module):
             ngram_context=ngram_context,
             output_indices=output_indices,
         )
+        combine = self._combine
+        if combine is None:
+            combine = self.layer.mlp_hyper_connection.combine
         capture_hc_mean(
-            self.layer.mlp_hyper_connection.combine(
-                hidden_states, block_output, injection
-            ),
+            combine(hidden_states, block_output, injection),
             self._buffer,
             self._slot,
             self._hc_count,

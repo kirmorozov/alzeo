@@ -46,6 +46,22 @@ lane that already drafts with this image does for its drafter (`qwen38-nemotron.
 `b12x` on the installer's line hands the drafter back to the target's loader should a drafter of another shape ever
 want it, and the MTP target, which loads no drafter, keeps the unit it had.
 
+**The drafter's five layers run on Triton attention, named on the unit's line.** Left to the image, the drafter's
+attention went to FlashInfer, whose kernels on this GPU take pages of 16, 32 or 64 tokens, while every attention
+layer's KV block is 3008 tokens here: the size the hybrid cache gives attention so that its page equals the mamba
+page. Holding that block as 47 kernel blocks of 64 is a view that exists only when a block is one dense page, and
+under the one layout the target's QSA layers allow (BLHNC, the five layer pages of a block side by side) it is not,
+so the boot died in `create_kv_cache_views` ("block stride 30801920 != page 6160384", 2026-11-08); the layout that
+message proposed instead, LBNHC, the QSA backend refuses ("valid layouts: ['BLHNC']", the boot after). The unit
+now renders `--speculative-config.attention_backend TRITON_ATTN`, the drafter's own backend and nobody else's (the
+image's dflash loader hands it to the drafter's config alone; the target's layers keep the backends the image picks
+for them, and the unit forces no KV layout on the container): Triton takes any block that is a multiple of 16, so
+the drafter's kernel block is its manager block and nothing is split, and it serves the fp8 KV, the sliding window
+of 2048 and the non-causal block this drafter asks for. `FLASH_LOCAL_DRAFT_ATTENTION_BACKEND` in
+`install-flash-local.sh` is the knob; empty leaves the choice to vLLM again. The capture plugin materializes each
+captured layer's completed state through the image's plain `hc_combine` op, which allocates its output, rather than
+the layer's workspace-bound method, so the pending triple the next layer reads is never written under it.
+
 ## v1.43.0 (2026-11-05): two boxes that serve one model share its requests, a conversation staying on the box that holds it
 
 **Two boxes that serve one model share its requests.** Until now, the box a request was sent to served every model it

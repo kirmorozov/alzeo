@@ -20,6 +20,7 @@ from __future__ import annotations
 import torch
 
 from vllm.distributed import get_pp_group
+from vllm.models.qwen4_exp.nvidia.hyperconnection import hc_combine
 from vllm.models.qwen4_exp.nvidia.model import Qwen4ExpForConditionalGeneration
 from vllm.sequence import IntermediateTensors
 
@@ -94,9 +95,18 @@ class DFlashQwen4ExpForConditionalGeneration(Qwen4ExpForConditionalGeneration):
             device=inner.embed_tokens.weight.device,
         )
         inner.register_buffer("_dflash_aux_buffer", buffer, persistent=False)
+
+        # The image's plain combine op, not the layer's workspace-bound method:
+        # the triple the wrapper materializes goes on to the next layer
+        # untouched, so the combine must write nothing that aliases it, and
+        # this op allocates its output (DFlashCaptureLayer says why).
+        def combine(hidden_states, block_output, injection):
+            return hc_combine(hidden_states, block_output, injection, hc_count)
+
         for slot, layer_idx in enumerate(capture_ids):
             inner.layers[layer_idx] = DFlashCaptureLayer(
-                inner.layers[layer_idx], buffer, slot, hc_count, hidden_size
+                inner.layers[layer_idx], buffer, slot, hc_count, hidden_size,
+                combine=combine,
             )
         self._dflash_capture_slots = len(capture_ids)
 

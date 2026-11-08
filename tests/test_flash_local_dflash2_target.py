@@ -104,6 +104,18 @@ def load_model_module(added=None):
         )
 
     qwen.Qwen4ExpForConditionalGeneration = Base
+    # the image's plain combine op, which the model hands the capture wrapper: a pure
+    # function of the triple here as there, its calls kept for the tests to read
+    hyperconnection = types.ModuleType("vllm.models.qwen4_exp.nvidia.hyperconnection")
+    hyperconnection.hc_combine_calls = []
+
+    def hc_combine(residual, block_output, injection_logits, hc_count):
+        hyperconnection.hc_combine_calls.append(
+            (residual, block_output, injection_logits, hc_count)
+        )
+        return residual
+
+    hyperconnection.hc_combine = hc_combine
     sequence = types.ModuleType("vllm.sequence")
     sequence.IntermediateTensors = _IntermediateTensors
     for name, module in [
@@ -113,6 +125,7 @@ def load_model_module(added=None):
         ("vllm.models.qwen4_exp", types.ModuleType("vllm.models.qwen4_exp")),
         ("vllm.models.qwen4_exp.nvidia", types.ModuleType("vllm.models.qwen4_exp.nvidia")),
         ("vllm.models.qwen4_exp.nvidia.model", qwen),
+        ("vllm.models.qwen4_exp.nvidia.hyperconnection", hyperconnection),
         ("vllm.sequence", sequence),
     ]:
         keep(name, module)

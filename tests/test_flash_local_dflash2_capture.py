@@ -230,6 +230,48 @@ class HcMeanCapture(unittest.TestCase):
         for slot in (0, 1, 3, 4):
             self.assertTrue(t.isnan(buffer[slot]).all())
 
+    def test_a_combine_handed_in_is_the_one_used_and_the_layers_own_is_left_alone(self):
+        # the model hands the image's plain hc_combine op, which allocates its output; the
+        # layer's own method, bound to the b12x workspace, is then never called, so nothing
+        # it might write can land under the triple the next layer reads
+        t = TORCH
+        hc, hidden, tokens, max_tokens = 4, 8, 3, 16
+        own_calls, pure_calls = [], []
+
+        class Own:
+            def combine(self, hidden_states, block_output, injection):
+                own_calls.append(1)
+                return hidden_states
+
+        class Layer(t.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mlp_hyper_connection = Own()
+
+            def forward(self, hidden_states, prev_block_output, prev_injection,
+                        positions, *, input_ids, query_start_loc, ngram_context,
+                        output_indices=None):
+                return hidden_states, t.ones(tokens, hidden), t.full((tokens, hc), 0.5)
+
+        def pure(hidden_states, block_output, injection):
+            pure_calls.append((hidden_states, block_output, injection))
+            return hidden_states + 1
+
+        buffer = t.full((1, max_tokens, hidden), float("nan"))
+        wrapped = self.capture.DFlashCaptureLayer(Layer(), buffer, 0, hc, hidden, combine=pure)
+        x = t.arange(tokens * hc * hidden, dtype=t.float32).view(tokens, hc * hidden)
+        out = wrapped(x, None, None, t.arange(tokens), input_ids=None,
+                      query_start_loc=None, ngram_context=None)
+        self.assertEqual(own_calls, [])
+        self.assertEqual(len(pure_calls), 1)
+        self.assertIs(pure_calls[0][0], out[0])
+        self.assertIs(pure_calls[0][1], out[1])
+        self.assertIs(pure_calls[0][2], out[2])
+        want = (x + 1).view(tokens, hc, hidden).mean(dim=1)
+        self.assertTrue(t.equal(buffer[0, :tokens], want))
+        # the triple itself went on untouched
+        self.assertTrue(t.equal(out[0], x))
+
 
 if __name__ == "__main__":
     unittest.main()
