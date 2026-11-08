@@ -17,6 +17,7 @@ outer forward does, with what the test hands it: what is under test is this
 file's own choices, not the image's. The tensor work needs torch and skips
 without it.
 """
+import ast
 import importlib.util
 import pathlib
 import sys
@@ -42,8 +43,20 @@ class _IntermediateTensors:
     """Stand-in for vllm.sequence.IntermediateTensors (only isinstance is used)."""
 
 
-def load_model_module():
-    """Import flash_local_dflash2.model against stubbed vllm modules."""
+def load_model_module(added=None):
+    """Import flash_local_dflash2.model against stubbed vllm modules.
+
+    Every module name this puts into sys.modules is recorded in ``added`` so the
+    caller can take them back out: another suite in the same process asserts
+    that nothing in it has ever imported vllm, and these stubs are named vllm.*.
+    """
+    added = [] if added is None else added
+
+    def keep(name, module):
+        if name not in sys.modules:
+            sys.modules[name] = module
+            added.append(name)
+
     vllm = types.ModuleType("vllm")
     distributed = types.ModuleType("vllm.distributed")
     distributed.get_pp_group = lambda: types.SimpleNamespace(world_size=1)
@@ -102,24 +115,27 @@ def load_model_module():
         ("vllm.models.qwen4_exp.nvidia.model", qwen),
         ("vllm.sequence", sequence),
     ]:
-        sys.modules.setdefault(name, module)
+        keep(name, module)
 
     capture_path = PLUGIN / "flash_local_dflash2" / "capture.py"
     model_path = PLUGIN / "flash_local_dflash2" / "model.py"
-    package = types.ModuleType("flash_local_dflash2")
-    package.__path__ = [str(PLUGIN / "flash_local_dflash2")]
-    sys.modules.setdefault("flash_local_dflash2", package)
+    keep("flash_local_dflash2", _package_module())
     for name, path in [
         ("flash_local_dflash2.capture", capture_path),
         ("flash_local_dflash2.model", model_path),
     ]:
-        if name in sys.modules:
-            continue
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            keep(name, module)
+            spec.loader.exec_module(module)
     return sys.modules["flash_local_dflash2.model"]
+
+
+def _package_module():
+    package = types.ModuleType("flash_local_dflash2")
+    package.__path__ = [str(PLUGIN / "flash_local_dflash2")]
+    return package
 
 
 def vllm_config(method="dflash", tokens=16, hidden=8, hc=4, dtype=None):
@@ -135,11 +151,21 @@ def vllm_config(method="dflash", tokens=16, hidden=8, hc=4, dtype=None):
     )
 
 
+@unittest.skipIf(TORCH is None, "needs torch: the plugin's capture module imports it")
 class TargetFeed(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = load_model_module()
+        cls._stubbed = []
+        cls.module = load_model_module(cls._stubbed)
         cls.target_class = cls.module.DFlashQwen4ExpForConditionalGeneration
+
+    @classmethod
+    def tearDownClass(cls):
+        # The gate suite asserts, for the whole process, that nothing has
+        # imported vllm; the stubs that stand in for the image are named vllm.*,
+        # so they must not outlive this class.
+        for name in cls._stubbed:
+            sys.modules.pop(name, None)
 
     def setUp(self):
         # the runner's own convention: vLLM adds 1 to the drafter's
@@ -228,6 +254,28 @@ class TargetFeed(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             target.get_mtp_target_hidden_states()
         self.assertIn("dflash", str(ctx.exception))
+
+
+class TargetSource(unittest.TestCase):
+    """What holds whatever torch is installed: the override is in the source."""
+
+    def test_the_subclass_defines_the_override_itself(self):
+        # Inheriting the image's method is what crashes the boot, so the fix has
+        # to be a method of this class, not an attribute set somewhere else.
+        tree = ast.parse((PLUGIN / "flash_local_dflash2" / "model.py").read_text())
+        target = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and node.name == "DFlashQwen4ExpForConditionalGeneration"
+        )
+        defined = {
+            node.name
+            for node in target.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        self.assertIn("get_mtp_target_hidden_states", defined)
+        self.assertIn("forward", defined)
 
 
 if __name__ == "__main__":
