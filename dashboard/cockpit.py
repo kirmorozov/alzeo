@@ -62,6 +62,11 @@ STATIC_DIR = HERE / "static"
 # reverse proxy injects after its Basic-auth. Point nginx proxy manager at this port;
 # the main one keeps the cookie/API-key path for the LAN. 0 = off.
 PROXY_PORT = int(os.environ.get("COCKPIT_PROXY_PORT", "0") or 0)
+# Temporary escape for wiring the proxy up: the listener answers without the header.
+# Only ever set on purpose (the unit renders it from DASH_PROXY_OPEN), it is loudly
+# logged at start, and closing it again takes DASH_PROXY_OPEN=0 and a re-run: the
+# installed unit's value is kept otherwise.
+PROXY_OPEN = (os.environ.get("COCKPIT_PROXY_OPEN", "") or "").strip() == "1"
 # Remote access behind a reverse proxy (dashboard/proxy.md): nginx proxy manager does
 # the Basic-auth and injects a header carrying this secret; a request whose header
 # matches is treated as signed in, so the page opens through the proxy without a
@@ -6054,18 +6059,19 @@ class ProxyHandler(Handler):
     session cookie minted on the LAN port is worth nothing on this one. With no
     secret configured every request answers 401, so a proxy port enabled without
     COCKPIT_MAGIC_SECRET is dead, never open. /api/health stays public for the
-    proxy's own health checks."""
+    proxy's own health checks. COCKPIT_PROXY_OPEN=1 opens it without the header for
+    the moment of wiring the proxy up; nothing else about it changes."""
 
     def authed(self) -> bool:
-        return magic_authed(self.headers)
+        return PROXY_OPEN or magic_authed(self.headers)
 
     def do_GET(self):
-        if self.path.split("?", 1)[0] != "/api/health" and not magic_authed(self.headers):
+        if not (PROXY_OPEN or magic_authed(self.headers)) and self.path.split("?", 1)[0] != "/api/health":
             return self.send_json({"error": "auth"}, 401)
         return Handler.do_GET(self)
 
     def do_POST(self):
-        if not magic_authed(self.headers):
+        if not (PROXY_OPEN or magic_authed(self.headers)):
             # as on the main port: refuse before the body is read, linger for what
             # the client is still sending so it reads the 401 and not a reset
             self.close_connection = True
@@ -6142,8 +6148,10 @@ def main():
         psrv = Server((BIND, PROXY_PORT), ProxyHandler)
         threading.Thread(target=psrv.serve_forever, daemon=True).start()
         print(f"proxy listener on http://{BIND}:{PROXY_PORT} "
-              + ("(secret header required)" if MAGIC_SECRET else
-                 "(NO COCKPIT_MAGIC_SECRET: this port answers 401 to everything)"))
+              + ("(COCKPIT_PROXY_OPEN=1: NO SECRET REQUIRED, every page on this port "
+                 "is open to the network \u2014 close it with DASH_PROXY_OPEN=0)" if PROXY_OPEN else
+                 ("(secret header required)" if MAGIC_SECRET else
+                  "(NO COCKPIT_MAGIC_SECRET: this port answers 401 to everything)")))
     srv = Server((BIND, PORT), Handler)
     print(f"Alzeo cockpit {VERSION} on http://{BIND}:{PORT} (repo: {REPO_DIR})"
           + ("  [DRY RUN: nothing is executed]" if DRY_RUN else ""))

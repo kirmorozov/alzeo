@@ -32,6 +32,9 @@ EnvironmentFile=-__HOME__/.config/qwen38/dashboard.env
 # only to requests carrying the secret header above. Point nginx proxy manager at
 # this port; 0 = no listener.
 Environment=COCKPIT_PROXY_PORT=__PROXY_PORT__
+# Temporary escape, 1 = the listener answers without the secret header (wiring the
+# proxy up). Loudly logged at start. Close it again with DASH_PROXY_OPEN=0.
+Environment=COCKPIT_PROXY_OPEN=__PROXY_OPEN__
 # Self-restart of a wedged engine, off unless you ask for it. Pair it with
 # COCKPIT_AUTOHEAL_GRACE=<seconds> to keep the wedge up for forensics first.
 Environment=COCKPIT_AUTOHEAL=0

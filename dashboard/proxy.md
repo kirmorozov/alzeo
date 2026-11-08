@@ -134,6 +134,7 @@ the same box — with one exception: the Agent relay binds its own address
 | `COCKPIT_MAGIC_SECRET` / `DASH_MAGIC_SECRET` | the header's value; empty = feature off | off |
 | `COCKPIT_MAGIC_HEADER` / `DASH_MAGIC_HEADER` | which header the proxy must inject | `X-Alzeo-Auth` |
 | `COCKPIT_PROXY_PORT` / `DASH_PROXY_PORT` | dedicated proxy-facing listener, header-only; 0 = off | off |
+| `COCKPIT_PROXY_OPEN` / `DASH_PROXY_OPEN` | 1 = that listener answers without the header, for wiring the proxy up (loudly logged); close with 0 and a re-run | 0 |
 | `COCKPIT_PUBLIC_URL` / `DASH_PUBLIC_URL` | the cockpit's public URL, for the relay's frame policy and its sign-in page | unset |
 | `COCKPIT_AGENT_PUBLIC_URL` / `DASH_AGENT_PUBLIC_URL` | the relay's public URL, for the cockpit's CSP and the Agent tab's frame | unset |
 
@@ -143,6 +144,11 @@ nginx unless `underscores_in_headers on`; dashes are safe). If you change
 name is an anonymous request.
 
 ## Belt notes
+
+- `DASH_PROXY_OPEN=1` is a wiring-time knob: while it is set the listener is as open
+  as the LAN port without a login, and the start log says so in as many words. It
+  persists in the unit like every other setting, so closing it is an explicit
+  `DASH_PROXY_OPEN=0 dashboard/install-dashboard.sh`, not an oversight.
 
 - The secret compares in constant time, and a missing header is compared rather than
   short-circuited, so the answer's timing says nothing about the secret.

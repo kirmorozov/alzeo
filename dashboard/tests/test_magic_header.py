@@ -33,14 +33,16 @@ HEADER = "X-Alzeo-Auth"
 CLOSED = "http://127.0.0.1:1"
 
 
-def load_cockpit(config_dir: Path, tag: str, magic: bool, agent_port: str = "0"):
+def load_cockpit(config_dir: Path, tag: str, magic: bool, agent_port: str = "0",
+                 proxy_open: bool = False):
     """Import cockpit.py with its environment at a throwaway box; magic=False leaves
     the secret unset, which is the installed default. The relay thread only starts in
     main(), so a nonzero COCKPIT_AGENT_PORT here just shapes the CSP and the state."""
     env = dict(COCKPIT_DRY_RUN="1", COCKPIT_CONFIG_DIR=str(config_dir),
                COCKPIT_REPO_DIR=str(REPO), COCKPIT_PORT="0", COCKPIT_AGENT_PORT=agent_port,
                COCKPIT_AUTOHEAL="0", COCKPIT_ENGINE=CLOSED, COCKPIT_PROXY=CLOSED,
-               COCKPIT_IMAGE=CLOSED, HOME=str(config_dir))
+               COCKPIT_IMAGE=CLOSED, HOME=str(config_dir),
+               COCKPIT_PROXY_OPEN="1" if proxy_open else "0")
     if magic:
         env.update(COCKPIT_MAGIC_SECRET=SECRET,
                    COCKPIT_PUBLIC_URL="https://dash.example.com",
@@ -79,6 +81,7 @@ class CockpitBase(unittest.TestCase):
     magic = True
     tag = "on"
     agent_port = "0"
+    proxy_open = False
 
     @classmethod
     def setUpClass(cls):
@@ -86,7 +89,7 @@ class CockpitBase(unittest.TestCase):
         cls.path_before = list(sys.path)
         cls.tmp = Path(tempfile.mkdtemp(prefix=f"cockpit-magic-{cls.tag}-"))
         (cls.tmp / "api-key").write_text(API_KEY + "\n")
-        cls.cp = load_cockpit(cls.tmp, cls.tag, cls.magic, cls.agent_port)
+        cls.cp = load_cockpit(cls.tmp, cls.tag, cls.magic, cls.agent_port, cls.proxy_open)
         cls.srv = cls.cp.Server(("127.0.0.1", 0), cls.cp.Handler)
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         cls.port = cls.srv.server_address[1]
@@ -312,6 +315,33 @@ class ProxyPortOff(ProxyPortBase):
         self.assertEqual(st, 401)                    # off: no secret, no way in
         st, _, data = self.preq("GET", "/api/health")
         self.assertEqual(st, 200)                    # health stays
+
+
+class ProxyPortWired(ProxyPortBase):
+    """DASH_PROXY_OPEN=1: the moment of wiring the proxy up. The listener answers
+    without the header, and the CSRF token is its only gate on mutations, exactly
+    as the main port is after a login: open means open, nothing about it is subtle."""
+    magic, tag, proxy_open = True, "pp-open", True
+
+    def test_the_page_answers_without_the_header(self):
+        st, _, data = self.preq("GET", "/")
+        self.assertEqual(st, 200)
+        self.assertIn(b'id="spine"', data)
+        st, _, data = self.preq("GET", "/api/state")
+        self.assertEqual(st, 200)
+        self.assertIn("config", json.loads(data))
+
+    def test_mutations_still_owe_the_csrf_token(self):
+        # open is not the header path: the token is still what a POST must echo
+        st, _, data = self.preq("POST", "/api/action", body={"name": "nope"})
+        self.assertEqual(st, 403)
+        self.assertEqual(json.loads(data)["error"], "csrf")
+        st, _, data = self.preq("POST", "/api/csrf", body={})
+        self.assertEqual(st, 200)
+        tok = json.loads(data)["token"]
+        st, _, data = self.preq("POST", "/api/action", body={"name": "nope", "csrf": tok})
+        self.assertEqual(st, 404)                    # the token opens the surface
+        self.assertEqual(json.loads(data)["error"], "unknown action")
 
 
 class HeaderHygiene(unittest.TestCase):

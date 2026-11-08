@@ -17,7 +17,9 @@
 # Remote access behind a reverse proxy (dashboard/proxy.md): DASH_MAGIC_SECRET (kept
 # in a 0600 file the unit reads, never in the unit itself), DASH_MAGIC_HEADER,
 # DASH_PROXY_PORT (the dedicated header-only listener the proxy points at),
-# DASH_PUBLIC_URL and DASH_AGENT_PUBLIC_URL (public URLs, CSP only).
+# DASH_PROXY_OPEN (1 = that listener temporarily answers without the header, for
+# wiring the proxy up; close with 0), DASH_PUBLIC_URL and DASH_AGENT_PUBLIC_URL
+# (public URLs, CSP only).
 # The sudoers file is validated with visudo -c BEFORE it lands, from a temp
 # path, so a broken render can never brick sudo.
 set -euo pipefail
@@ -52,6 +54,8 @@ MAGIC_HEADER="${DASH_MAGIC_HEADER:-$(installed COCKPIT_MAGIC_HEADER)}"; MAGIC_HE
 PUBLIC_URL="${DASH_PUBLIC_URL:-$(installed COCKPIT_PUBLIC_URL)}"; PUBLIC_URL="${PUBLIC_URL:-}"
 AGENT_PUBLIC_URL="${DASH_AGENT_PUBLIC_URL:-$(installed COCKPIT_AGENT_PUBLIC_URL)}"; AGENT_PUBLIC_URL="${AGENT_PUBLIC_URL:-}"
 PROXY_PORT="${DASH_PROXY_PORT:-$(installed COCKPIT_PROXY_PORT)}"; PROXY_PORT="${PROXY_PORT:-0}"
+PROXY_OPEN="${DASH_PROXY_OPEN:-$(installed COCKPIT_PROXY_OPEN)}"; PROXY_OPEN="${PROXY_OPEN:-0}"
+[[ "$PROXY_OPEN" =~ ^[01]$ ]] || die "DASH_PROXY_OPEN must be 0 or 1 (got '$PROXY_OPEN')"
 [[ "$PROXY_PORT" =~ ^[0-9]+$ ]] || die "DASH_PROXY_PORT must be a number (got '$PROXY_PORT')"
 if [ "$PROXY_PORT" != "0" ]; then
   [ "$PROXY_PORT" != "$PORT" ] || die "the proxy listener cannot share the cockpit port $PORT"
@@ -125,7 +129,7 @@ sed -e "s|__PORT__|$PORT|g" -e "s|__BIND__|$BIND|g" -e "s|__USER__|$(id -un)|g" 
     -e "s|__AGENT_PORT__|$AGENT_PORT|g" -e "s|__AGENT_BIND__|$AGENT_BIND|g" \
     -e "s|__AGENT_UPSTREAM__|$AGENT_UPSTREAM|g" \
     -e "s|__MAGIC_HEADER__|$MAGIC_HEADER|g" \
-    -e "s|__PROXY_PORT__|$PROXY_PORT|g" \
+    -e "s|__PROXY_PORT__|$PROXY_PORT|g" -e "s|__PROXY_OPEN__|$PROXY_OPEN|g" \
     -e "s|__PUBLIC_URL__|${PUBLIC_URL//&/\\&}|g" -e "s|__AGENT_PUBLIC_URL__|${AGENT_PUBLIC_URL//&/\\&}|g" \
     "$HERE/qwen38-dashboard.service.template" > "$TMP_UNIT"
 grep -q '__[A-Z][A-Z0-9_]*__' "$TMP_UNIT" && die "unsubstituted placeholder in unit"
