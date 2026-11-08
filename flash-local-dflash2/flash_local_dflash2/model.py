@@ -39,6 +39,21 @@ class DFlashQwen4ExpForConditionalGeneration(Qwen4ExpForConditionalGeneration):
         # Set once by set_aux_hidden_state_layers, read in forward: the
         # forward's return shape is a static choice, not a branch on data.
         self._dflash_capture_slots = 0
+        # [max_num_batched_tokens, hidden_size], filled in forward. See
+        # get_mtp_target_hidden_states for why the drafter needs one.
+        self._dflash_last_hidden_buffer = None
+        inner = self.language_model.model
+        spec_config = vllm_config.speculative_config
+        if (
+            spec_config is not None
+            and getattr(spec_config, "method", None) == "dflash"
+        ):
+            self._dflash_last_hidden_buffer = torch.empty(
+                vllm_config.scheduler_config.max_num_batched_tokens,
+                inner.config.hidden_size,
+                dtype=vllm_config.model_config.dtype,
+                device=inner.embed_tokens.weight.device,
+            )
 
     def set_aux_hidden_state_layers(self, layer_ids: tuple[int, ...]) -> None:
         # The runner hands the drafter's target_layer_ids plus one: the input
@@ -116,7 +131,44 @@ class DFlashQwen4ExpForConditionalGeneration(Qwen4ExpForConditionalGeneration):
             return hidden_states
         buffer = self.language_model.model._dflash_aux_buffer
         num_tokens = hidden_states.shape[0]
+        last_buffer = self._dflash_last_hidden_buffer
+        if last_buffer is not None:
+            # Same address every step, so the CUDA graphs the b12x runner
+            # captures over this forward replay a write that is really there.
+            last_buffer[:num_tokens].copy_(hidden_states)
         aux_hidden_states = [
             buffer[slot, :num_tokens] for slot in range(self._dflash_capture_slots)
         ]
         return hidden_states, aux_hidden_states
+
+    def get_mtp_target_hidden_states(self) -> torch.Tensor:
+        """The target's final hidden states, for the runner's spec-dec feed.
+
+        The runner feeds the drafter ``last_hidden_states`` and, when the
+        target answers to ``get_mtp_target_hidden_states``, it overrides that
+        with what this returns, sliced to the active token count
+        (``v1/worker/gpu/model_runner.py``: ``pre_hc_hidden_states[:n]``, at
+        both the profiling ``_dummy_run`` and the real propose path). It makes
+        no None check. The image's Qwen4Exp does answer to that name - MTP uses
+        it for the pre-final-mixer multi-stream state ``[T, hc_count * H]``,
+        which the image allocates only under ``method == "mtp"``. So under
+        ``method == "dflash"`` the inherited method returns None and the slice
+        raises ``TypeError: 'NoneType' object is not subscriptable`` in
+        ``determine_available_memory``, before a single token is drafted.
+
+        Overriding it here, rather than deleting it, is the only option: the
+        method is inherited, so ``hasattr`` is true whatever this class does.
+        Returning the ordinary post-mixer hidden states is what the generic
+        path would have passed anyway (``spec_hidden_states = hidden_states``).
+        The DFlash2 drafter does not want the multi-stream state either: its
+        ``fc`` is built at ``target_hidden_size * len(aux_layers)`` (5 x 2560 =
+        12800, the width of ``fc.weight`` in the drafter), so its features come
+        from the aux list and this argument stays a plain ``[T, H]``.
+        """
+        buffer = self._dflash_last_hidden_buffer
+        if buffer is None:
+            raise RuntimeError(
+                "the DFlash2 target was built without its last-hidden capture; "
+                "this target is only meant for --speculative-config.method dflash"
+            )
+        return buffer
