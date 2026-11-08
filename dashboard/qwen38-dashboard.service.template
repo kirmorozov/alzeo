@@ -19,6 +19,19 @@ Environment=COCKPIT_REPO_DIR=__REPO_DIR__
 Environment=COCKPIT_AGENT_PORT=__AGENT_PORT__
 Environment=COCKPIT_AGENT_BIND=__AGENT_BIND__
 Environment=COCKPIT_AGENT_UPSTREAM=__AGENT_UPSTREAM__
+# Remote access behind nginx proxy manager (dashboard/proxy.md): the proxy does the
+# Basic-auth and injects COCKPIT_MAGIC_HEADER with the secret from the env file below;
+# a request that carries it reads as signed in, so the page opens without the API key.
+# The secret lives in a 0600 file, never in this unit: unit files are world-readable,
+# and a missing file leaves the feature off (the direct-LAN default).
+Environment=COCKPIT_MAGIC_HEADER=__MAGIC_HEADER__
+Environment=COCKPIT_PUBLIC_URL=__PUBLIC_URL__
+Environment=COCKPIT_AGENT_PUBLIC_URL=__AGENT_PUBLIC_URL__
+EnvironmentFile=-__HOME__/.config/qwen38/dashboard.env
+# The dedicated proxy-facing listener (dashboard/proxy.md): the same page, opens
+# only to requests carrying the secret header above. Point nginx proxy manager at
+# this port; 0 = no listener.
+Environment=COCKPIT_PROXY_PORT=__PROXY_PORT__
 # Self-restart of a wedged engine, off unless you ask for it. Pair it with
 # COCKPIT_AUTOHEAL_GRACE=<seconds> to keep the wedge up for forensics first.
 Environment=COCKPIT_AUTOHEAL=0

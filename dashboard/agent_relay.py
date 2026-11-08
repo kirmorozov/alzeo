@@ -4,9 +4,11 @@
 `opencode serve` listens on loopback with a Basic password that never leaves the
 box. This relay is the only thing that reaches it. It binds one address (the
 tailnet address by default), accepts a request only with a valid cockpit session
-cookie, presents the Basic credentials upstream, and streams the answer back:
-plain responses, server-sent events, and the WebSocket upgrade the terminal
-panel uses. The browser sees one host for the cockpit and the relay (cookies
+cookie (or, behind a reverse proxy that does the Basic-auth, the proxy's secret
+header: RelayConfig.magic, dashboard/proxy.md), presents the Basic credentials
+upstream, and streams the answer back: plain responses, server-sent events, and
+the WebSocket upgrade the terminal panel uses. The browser sees one host for the
+cockpit and the relay (cookies
 ignore ports), so the Agent tab frames the interface with no second login and
 no Basic-auth prompt, which Chrome would block inside a cross-origin frame.
 
@@ -17,6 +19,7 @@ them without a browser.
 from __future__ import annotations
 
 import base64
+import hmac
 import http.client
 import http.server
 import json
@@ -141,9 +144,10 @@ def read_credentials(path: Path) -> tuple[str, str] | None:
 
 
 def forward_request_headers(items, upstream_host: str, auth: str,
-                            websocket: bool = False) -> list[tuple[str, str]]:
+                            websocket: bool = False, drop=()) -> list[tuple[str, str]]:
     items = list(items)
-    out = [(k, v) for k, v in items if k.lower() not in REQUEST_DROP]
+    gone = REQUEST_DROP | {d.lower() for d in drop if d}
+    out = [(k, v) for k, v in items if k.lower() not in gone]
     out.append(("Host", upstream_host))
     if any(k.lower() == "origin" for k, _ in items):
         # The browser's origin was held to this relay's own host before anything was
@@ -177,11 +181,16 @@ def forward_response_headers(items, drop=()) -> list[tuple[str, str]]:
     return out
 
 
-def frame_policy(host_header: str | None, cockpit_port: int) -> str:
+def frame_policy(host_header: str | None, cockpit_port: int, cockpit_public: str | None = None) -> str:
     """Only the cockpit on the same host may frame the interface (clickjacking
-    guard). The upstream policy has no frame-ancestors, so this one governs."""
+    guard). The upstream policy has no frame-ancestors, so this one governs. With a
+    public URL configured (dashboard/proxy.md) the cockpit's proxy host is allowed
+    too: a page served through it frames the relay through it, on another host."""
     name = host_name(host_header) or "127.0.0.1"
-    return f"frame-ancestors 'self' http://{name}:{cockpit_port}"
+    policy = f"frame-ancestors 'self' http://{name}:{cockpit_port}"
+    if cockpit_public:
+        policy += f" {cockpit_public}"
+    return policy
 
 
 def split_upstream(url: str) -> tuple[str, int]:
@@ -250,10 +259,24 @@ class RelayConfig:
     credentials: Callable[[], tuple[str, str] | None]      # (user, password) or None
     is_authed: Callable[[str | None], bool]                # Cookie header -> valid session?
     cockpit_port: int                                      # for frame-ancestors and the sign-in hint
+    magic: tuple[str, str] | None = None                   # (header, secret) the reverse proxy injects
+    cockpit_public: str | None = None                      # the cockpit's public URL behind the proxy
 
     @property
     def upstream_host(self) -> str:
         return f"{self.upstream[0]}:{self.upstream[1]}"
+
+    def magic_ok(self, headers) -> bool:
+        """True when the request carries the reverse proxy's secret header (the cockpit's
+        COCKPIT_MAGIC_SECRET, dashboard/proxy.md): nginx proxy manager gates the public
+        host with Basic-auth and injects this header, and the secret never reaches the
+        browser. Constant-time compare; off when no secret is configured, which is how
+        the relay behaves on the direct LAN path."""
+        if not self.magic:
+            return False
+        name, secret = self.magic
+        got = (headers.get(name) or "").encode("utf-8", "replace")
+        return hmac.compare_digest(got, secret.encode())
 
 
 def health(cfg: RelayConfig, timeout: float = 3.0) -> dict:
@@ -341,7 +364,7 @@ def make_handler(cfg: RelayConfig) -> type[http.server.BaseHTTPRequestHandler]:
             public = (self.command == "GET" and self.path.split("?", 1)[0] in PUBLIC_PATHS
                       and not self.headers.get("Transfer-Encoding")
                       and (self.headers.get("Content-Length") or "0").strip() == "0")
-            if not public and not cfg.is_authed(self.headers.get("Cookie")):
+            if not public and not cfg.is_authed(self.headers.get("Cookie")) and not cfg.magic_ok(self.headers):
                 return self.refuse(401, "cockpit session required")
             asset = injected_asset(self.path) if self.command in ("GET", "HEAD") else None
             if asset:
@@ -368,7 +391,8 @@ def make_handler(cfg: RelayConfig) -> type[http.server.BaseHTTPRequestHandler]:
             self.close_connection = True
             wants_page = self.command == "GET" and "text/html" in (self.headers.get("Accept") or "")
             if wants_page and code == 401:
-                cockpit = f"http://{host_name(self.headers.get('Host')) or '127.0.0.1'}:{cfg.cockpit_port}/"
+                cockpit = cfg.cockpit_public + "/" if cfg.cockpit_public else \
+                    f"http://{host_name(self.headers.get('Host')) or '127.0.0.1'}:{cfg.cockpit_port}/"
                 payload = SIGN_IN_PAGE.format(cockpit=cockpit).encode()
                 ctype = "text/html; charset=utf-8"
             else:
@@ -402,9 +426,14 @@ def make_handler(cfg: RelayConfig) -> type[http.server.BaseHTTPRequestHandler]:
                 self.wfile.write(payload)
 
         def own_headers(self):
-            self.send_header("Content-Security-Policy", frame_policy(self.headers.get("Host"), cfg.cockpit_port))
+            self.send_header("Content-Security-Policy",
+                             frame_policy(self.headers.get("Host"), cfg.cockpit_port, cfg.cockpit_public))
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            # opencode's event streams ride this relay: an nginx proxy manager in
+            # front buffers a response it is not told not to, and the Agent tab
+            # would then see its events in batches, or never
+            self.send_header("X-Accel-Buffering", "no")
 
         # ---- plain HTTP, streamed ----
         def forward(self, auth: str, body: bytes):
@@ -415,7 +444,8 @@ def make_handler(cfg: RelayConfig) -> type[http.server.BaseHTTPRequestHandler]:
                 # a vanished client shows up as a write error on our side instead
                 conn.sock.settimeout(None)
                 conn.putrequest(self.command, self.path, skip_host=True, skip_accept_encoding=True)
-                for k, v in forward_request_headers(self.headers.items(), cfg.upstream_host, auth):
+                for k, v in forward_request_headers(self.headers.items(), cfg.upstream_host, auth,
+                                                    drop=(cfg.magic[0],) if cfg.magic else ()):
                     conn.putheader(k, v)
                 if body or self.command in ("POST", "PUT", "PATCH"):
                     conn.putheader("Content-Length", str(len(body)))
@@ -531,7 +561,8 @@ def make_handler(cfg: RelayConfig) -> type[http.server.BaseHTTPRequestHandler]:
                 up.settimeout(CONNECT_TIMEOUT)
                 lines = [f"{self.command} {self.path} HTTP/1.1"]
                 lines += [f"{k}: {v}" for k, v in forward_request_headers(
-                    self.headers.items(), cfg.upstream_host, auth, websocket=True)]
+                    self.headers.items(), cfg.upstream_host, auth, websocket=True,
+                    drop=(cfg.magic[0],) if cfg.magic else ())]
                 up.sendall(("\r\n".join(lines) + "\r\n\r\n").encode("latin-1"))
                 head = b""
                 while b"\r\n\r\n" not in head:

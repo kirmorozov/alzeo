@@ -57,6 +57,29 @@ AGENT_BIND = os.environ.get("COCKPIT_AGENT_BIND", "tailscale")
 AGENT_UPSTREAM = os.environ.get("COCKPIT_AGENT_UPSTREAM", "http://127.0.0.1:4096")
 AGENT_UNIT = "opencode-web.service"
 STATIC_DIR = HERE / "static"
+# The dedicated proxy-facing listener (dashboard/proxy.md): the same page and the
+# same action surface, but it opens only to requests carrying the secret header the
+# reverse proxy injects after its Basic-auth. Point nginx proxy manager at this port;
+# the main one keeps the cookie/API-key path for the LAN. 0 = off.
+PROXY_PORT = int(os.environ.get("COCKPIT_PROXY_PORT", "0") or 0)
+# Remote access behind a reverse proxy (dashboard/proxy.md): nginx proxy manager does
+# the Basic-auth and injects a header carrying this secret; a request whose header
+# matches is treated as signed in, so the page opens through the proxy without a
+# second login. Empty = off, which is the default and the direct-LAN path. A custom
+# header is not something a cross-origin page can set (its preflight would need a CORS
+# answer this server never gives), so possession of it proves the proxy let you through
+# Basic-auth, which is what the session cookie proves on the direct path.
+MAGIC_SECRET = os.environ.get("COCKPIT_MAGIC_SECRET", "").strip()
+_MAGIC_DEFAULT = "X-Alzeo-Auth"
+# RFC 7230 token: anything else could not be sent as one header, so fall back and say so
+MAGIC_HEADER = os.environ.get("COCKPIT_MAGIC_HEADER", _MAGIC_DEFAULT).strip()
+if MAGIC_HEADER and not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", MAGIC_HEADER):
+    print(f"cockpit: ignoring invalid COCKPIT_MAGIC_HEADER {MAGIC_HEADER!r}, using {_MAGIC_DEFAULT!r}")
+    MAGIC_HEADER = _MAGIC_DEFAULT
+# Where the proxy serves the cockpit and the relay publicly (https://dash.example.com,
+# https://agent.example.com): CSP only, so a proxied page may frame the proxied relay.
+PUBLIC_URL = os.environ.get("COCKPIT_PUBLIC_URL", "").strip().rstrip("/")
+AGENT_PUBLIC_URL = os.environ.get("COCKPIT_AGENT_PUBLIC_URL", "").strip().rstrip("/")
 
 
 def _release() -> str:
@@ -1814,7 +1837,8 @@ AGENT_ENV_FILE = CONFIG_DIR / "opencode-web.env"
 # as COCKPIT_AGENT_UPSTREAM does its server: the bench run on a box read that box's real unit, and its
 # permission line, instead of the one it had started (agent-bench.mjs, 2026-10-23).
 AGENT_UNIT_PATH = Path(os.environ.get("COCKPIT_AGENT_UNIT_PATH") or Path("/etc/systemd/system") / AGENT_UNIT)
-AGENT = {"bind": None, "port": AGENT_PORT, "listening": False, "error": None, "since": None}
+AGENT = {"bind": None, "port": AGENT_PORT, "listening": False, "error": None, "since": None,
+         "public_url": AGENT_PUBLIC_URL or None}
 AGENT_BINARY: dict = {"key": None, "version": None}
 
 
@@ -1823,10 +1847,22 @@ def cookie_authed(cookie_header: str | None) -> bool:
     return any(check_token(v, "sess") for v in ar.cookie_values(cookie_header, "cockpit"))
 
 
+def magic_authed(headers) -> bool:
+    """True when the request carries the reverse proxy's secret header (proxy.md).
+    Off unless COCKPIT_MAGIC_SECRET is set; constant-time compare; a missing header
+    compares against the secret rather than short-circuiting on it being absent."""
+    if not MAGIC_SECRET:
+        return False
+    got = (headers.get(MAGIC_HEADER) or "").encode("utf-8", "replace")
+    return hmac.compare_digest(got, MAGIC_SECRET.encode())
+
+
 def agent_config() -> "ar.RelayConfig":
     return ar.RelayConfig(upstream=ar.split_upstream(AGENT_UPSTREAM),
                           credentials=lambda: ar.read_credentials(AGENT_ENV_FILE),
-                          is_authed=cookie_authed, cockpit_port=PORT)
+                          is_authed=cookie_authed, cockpit_port=PORT,
+                          magic=(MAGIC_HEADER, MAGIC_SECRET) if MAGIC_SECRET else None,
+                          cockpit_public=PUBLIC_URL or None)
 
 
 def agent_binary_version() -> str | None:
@@ -5678,6 +5714,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             frames = f"http://{name}:{AGENT_PORT}"
             if AGENT["bind"] and AGENT["bind"] != name:
                 frames += f" http://{AGENT['bind']}:{AGENT_PORT}"
+            if AGENT_PUBLIC_URL:
+                # the proxied page frames the proxied relay (proxy.md)
+                frames += f" {AGENT_PUBLIC_URL}"
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; img-src 'self' data:; "
                          "style-src 'self' 'unsafe-inline'; "
@@ -5725,7 +5764,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def authed(self) -> bool:
-        return cookie_authed(self.headers.get("Cookie"))
+        return cookie_authed(self.headers.get("Cookie")) or magic_authed(self.headers)
 
     # ---- routes ----
     def do_GET(self):
@@ -5932,7 +5971,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json({"error": "bad json"}, 400)
         if not isinstance(payload, dict):
             return self.send_json({"error": "bad json"}, 400)
-        if not check_token(payload.get("csrf", ""), "csrf", max_age=3600):
+        # CSRF: any mutating POST must echo the token bound to the session. A request
+        # let in by the proxy's secret is exempt: the token exists because a cookie is
+        # sent by a browser to any page on the host, while a custom header is set only
+        # by script on a page the server's own CORS answers allow, and this server
+        # allows no other origin. Possession of the secret is its own unforgeable proof.
+        if not magic_authed(self.headers) and not check_token(payload.get("csrf", ""), "csrf", max_age=3600):
             return self.send_json({"error": "csrf"}, 403)
         if path == "/api/action":
             code, out = start_action(str(payload.get("name", "")),
@@ -5984,6 +6028,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "keep-alive")
+        # an nginx proxy manager in front buffers a response it is not told not to,
+        # and the live view would then watch events arrive in batches, or never
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         try:
             while True:
@@ -5997,6 +6044,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # gone, reset, or no longer reading (the write timed out): nothing to answer
             self.close_connection = True
             return
+
+
+class ProxyHandler(Handler):
+    """The proxy-facing listener (COCKPIT_PROXY_PORT, dashboard/proxy.md): the same
+    page and action surface as the main one, but it opens only to requests carrying
+    the secret header nginx proxy manager injects after its Basic-auth. There is no
+    cookie path and no login here, by design: the edge holds the credentials, and a
+    session cookie minted on the LAN port is worth nothing on this one. With no
+    secret configured every request answers 401, so a proxy port enabled without
+    COCKPIT_MAGIC_SECRET is dead, never open. /api/health stays public for the
+    proxy's own health checks."""
+
+    def authed(self) -> bool:
+        return magic_authed(self.headers)
+
+    def do_GET(self):
+        if self.path.split("?", 1)[0] != "/api/health" and not magic_authed(self.headers):
+            return self.send_json({"error": "auth"}, 401)
+        return Handler.do_GET(self)
+
+    def do_POST(self):
+        if not magic_authed(self.headers):
+            # as on the main port: refuse before the body is read, linger for what
+            # the client is still sending so it reads the 401 and not a reset
+            self.close_connection = True
+            self.send_json({"error": "auth"}, 401)
+            return self._linger()
+        return Handler.do_POST(self)
 
 
 class Server(ar.BoundedThreadingMixIn, http.server.HTTPServer):
@@ -6057,6 +6132,18 @@ def main():
     start_samplers()
     if AGENT_PORT > 0:
         threading.Thread(target=agent_relay_thread, daemon=True).start()
+    if PROXY_PORT > 0:
+        if PROXY_PORT == PORT:
+            raise SystemExit(f"COCKPIT_PROXY_PORT cannot share the cockpit port {PORT}")
+        if PROXY_PORT == AGENT_PORT:
+            raise SystemExit(f"COCKPIT_PROXY_PORT cannot share the agent relay port {AGENT_PORT}")
+        # bound like the main server: nginx proxy manager reaches it on the same
+        # address it reaches the page on; the secret header is what opens it
+        psrv = Server((BIND, PROXY_PORT), ProxyHandler)
+        threading.Thread(target=psrv.serve_forever, daemon=True).start()
+        print(f"proxy listener on http://{BIND}:{PROXY_PORT} "
+              + ("(secret header required)" if MAGIC_SECRET else
+                 "(NO COCKPIT_MAGIC_SECRET: this port answers 401 to everything)"))
     srv = Server((BIND, PORT), Handler)
     print(f"Alzeo cockpit {VERSION} on http://{BIND}:{PORT} (repo: {REPO_DIR})"
           + ("  [DRY RUN: nothing is executed]" if DRY_RUN else ""))
