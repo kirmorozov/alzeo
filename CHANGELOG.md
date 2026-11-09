@@ -74,10 +74,16 @@ against the target's 2 of 256 a drafter page is 6,160,384 bytes, so five of them
 nine times that size. The plugin's `kvgroups` module wraps `get_kv_cache_groups` in `vllm.v1.core.kv_cache_utils`
 and splits any group made only of drafter layers (the image's own partition names them) one layer per group, which
 the image's DFlash speculator supports by design (one block table per draft group, each layer reading its own).
-A block is then one drafter page, and the same request costs about 7 GiB: the full window boots, with roughly
-half the MTP target's tokens of KV. Nothing changes for the MTP target or for any method but `dflash`, and a vLLM
-without the names the hook needs is logged and left alone. The lower waste of a drafter block matching the
-target's page (1504 tokens, half the target's block) stays open until the coordinator's block-size rules are read.
+A block is then one drafter page, and the same request would cost about 7 GiB. The same hook also shrinks the
+drafter's block to the largest divisor of the target's block, a multiple of 16, whose page fits under the target's
+page: 1504 tokens, a page of 3,080,192 bytes, so a block of the pool is the target's 3,272,704 bytes again and
+the pool holds for this target what it holds for MTP. vLLM allows a block size per group (the scheduler aligns to
+the groups' least common multiple, 3008, prefix hashing to their greatest common divisor, 1504, and the worker
+builds each layer's attention from its group's spec; Triton takes any kernel block that is a multiple of 16),
+and both changes were run against the image's own spec classes on the box before the boot. `DF2_DRAFT_BLOCK_SIZE`
+in the engine's environment is the kill switch for the block (`off` keeps the image's, a number forces one that
+must divide the target's block); the split has none. Nothing changes for the MTP target or for any method but
+`dflash`, and a vLLM without the names the hook needs is logged and left alone.
 ## v1.44.3 (2026-11-08): the local CI starts every job, and its pair tests take 16% less time
 
 **The local CI starts every job.** ci-local.sh runs the workflow's first six jobs side by side, each in a git worktree

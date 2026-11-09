@@ -14,6 +14,7 @@ imports nothing of vLLM when it loads.
 """
 import importlib
 import logging
+import os
 import pathlib
 import sys
 import types
@@ -27,9 +28,26 @@ TARGET_PAGE = 3_272_704
 DRAFT_PAGE = 6_160_384
 
 
+import dataclasses
+
+
+@dataclasses.dataclass(frozen=True)
 class Spec:
-    def __init__(self, page_size_bytes):
-        self.page_size_bytes = page_size_bytes
+    """A target spec: its page is fixed, padded as the image pads it."""
+
+    page_size_bytes: int
+
+
+@dataclasses.dataclass(frozen=True)
+class DraftSpec:
+    """A drafter attention spec: page = block_size * bytes per token, like SlidingWindowSpec."""
+
+    block_size: int
+    bytes_per_token: int = 2048
+
+    @property
+    def page_size_bytes(self):
+        return self.block_size * self.bytes_per_token
 
 
 class Group:
@@ -48,7 +66,7 @@ def image_groups():
     """What the image's grouping makes for this lane: 12 attention and 36 GDN layers of the
     target, one group each; the drafter's 5 layers in one group."""
     groups = [Group([f"model.layers.{i}.attn"], Spec(TARGET_PAGE)) for i in range(TARGET_LAYERS)]
-    draft = Spec(DRAFT_PAGE)
+    draft = DraftSpec(3008)
     groups.append(
         Group([f"model.layers.{TARGET_LAYERS + i}.self_attn.attn" for i in range(5)], draft)
     )
@@ -82,7 +100,11 @@ def stub_kv_cache_utils(groups):
 
     def get_kv_cache_groups(vllm_config, kv_cache_spec):
         calls.append(sorted(kv_cache_spec))
-        return list(groups)
+        target, draft = partition(vllm_config, kv_cache_spec)
+        out = [Group([name], spec) for name, spec in target.items()]
+        if draft:
+            out.append(Group(list(draft), next(iter(draft.values()))))
+        return out
 
     kcu = types.ModuleType("vllm.v1.core.kv_cache_utils")
     kcu.get_kv_cache_groups = get_kv_cache_groups
@@ -134,16 +156,54 @@ class PureSplit(unittest.TestCase):
         self.assertEqual(bytes_per_block(out), DRAFT_PAGE)
 
     def test_a_group_with_a_target_layer_in_it_is_kept_whole(self):
-        mixed = Group(["model.layers.47.attn", "model.layers.48.self_attn.attn"], Spec(DRAFT_PAGE))
+        mixed = Group(["model.layers.47.attn", "model.layers.48.self_attn.attn"], DraftSpec(3008))
         out, split = self.split([mixed])
         self.assertEqual(split, 0)
         self.assertEqual(out, [mixed])
 
     def test_a_drafter_group_of_one_layer_is_already_split(self):
-        single = Group(["model.layers.50.self_attn.attn"], Spec(DRAFT_PAGE))
+        single = Group(["model.layers.50.self_attn.attn"], DraftSpec(3008))
         out, split = self.split([single])
         self.assertEqual(split, 0)
         self.assertEqual(out, [single])
+
+
+class BlockArithmetic(unittest.TestCase):
+    def setUp(self):
+        self.kvgroups = load_hook()
+
+    def test_the_lane_numbers_give_1504(self):
+        self.assertEqual(self.kvgroups.draft_block_size(TARGET_PAGE, 2048, 3008), 1504)
+
+    def test_a_drafter_whose_page_already_fits_is_left_alone(self):
+        self.assertIsNone(self.kvgroups.draft_block_size(TARGET_PAGE, 1024, 3008))
+        self.assertIsNone(self.kvgroups.draft_block_size(TARGET_PAGE, 1088, 3008))
+
+    def test_the_result_divides_the_target_block_and_is_a_multiple_of_16(self):
+        for target_block in (3008, 3024, 4096, 2048):
+            for bpt in (2048, 4096, 1536):
+                d = self.kvgroups.draft_block_size(3_272_704, bpt, target_block)
+                if d is not None:
+                    self.assertEqual(target_block % d, 0)
+                    self.assertEqual(d % 16, 0)
+                    self.assertLessEqual(d * bpt, 3_272_704)
+
+    def test_no_divisor_fits_gives_none(self):
+        # Only 16 would divide 48; at 1 MB per token even that does not fit.
+        self.assertIsNone(self.kvgroups.draft_block_size(3_272_704, 1 << 20, 48))
+
+    def test_shrink_replaces_only_drafter_specs(self):
+        specs = all_specs(image_groups())
+        drafts = {n for n in specs if layer_index(n) >= TARGET_LAYERS}
+        out, block, page = self.kvgroups.shrink_draft_blocks(specs, drafts)
+        self.assertEqual((block, page), (1504, TARGET_PAGE))
+        for name, spec in out.items():
+            if name in drafts:
+                self.assertEqual(spec, DraftSpec(1504))
+            else:
+                self.assertIs(spec, specs[name])
+        self.assertIsNot(out, specs, "the input dict is not mutated")
+        self.assertEqual(specs[next(iter(drafts))], DraftSpec(3008))
 
 
 class InstalledHook(unittest.TestCase):
@@ -174,18 +234,46 @@ class InstalledHook(unittest.TestCase):
         self.assertTrue(getattr(self.kcu.get_kv_cache_groups, "_df2_kvgroups", False))
         self.assertIs(self.other.get_kv_cache_groups, self.kcu.get_kv_cache_groups)
 
-    def test_under_dflash_the_drafter_group_is_split(self):
+    def test_under_dflash_the_drafter_block_shrinks_and_its_group_is_split(self):
         with self.assertLogs("vllm.flash_local_dflash2.kvgroups", level=logging.INFO) as logs:
             out = self.kcu.get_kv_cache_groups(Config("dflash"), all_specs(self.groups))
         self.assertEqual(len(out), TARGET_LAYERS + 5)
-        self.assertEqual(bytes_per_block(out), DRAFT_PAGE)
+        # 1504 is the largest divisor of 3008 (a multiple of 16) whose drafter page fits under
+        # the target's 3,272,704: the pool block is the target's page again, as under MTP.
+        self.assertEqual(out[-1].kv_cache_spec, DraftSpec(1504))
+        self.assertEqual(out[-1].kv_cache_spec.page_size_bytes, 1504 * 2048)
+        self.assertEqual(bytes_per_block(out), TARGET_PAGE)
         self.assertEqual(self.kcu.calls, [sorted(all_specs(self.groups))], "called through once")
-        self.assertIn(f"{5 * DRAFT_PAGE} -> {DRAFT_PAGE}", logs.output[0])
+        self.assertIn("drafter block 1504 tokens, page 3080192 bytes under the target's 3272704", logs.output[0])
+        self.assertIn(f"{5 * 1504 * 2048} -> {TARGET_PAGE}", logs.output[1])
+
+    def test_the_switch_off_keeps_the_image_block_and_still_splits(self):
+        os.environ["DF2_DRAFT_BLOCK_SIZE"] = "off"
+        try:
+            out = self.kcu.get_kv_cache_groups(Config("dflash"), all_specs(self.groups))
+        finally:
+            del os.environ["DF2_DRAFT_BLOCK_SIZE"]
+        self.assertEqual(len(out), TARGET_LAYERS + 5)
+        self.assertEqual(out[-1].kv_cache_spec, DraftSpec(3008))
+        self.assertEqual(bytes_per_block(out), DRAFT_PAGE)
+
+    def test_a_forced_block_is_used_when_legal_and_refused_when_not(self):
+        for forced, expected in (("752", 752), ("1000", 1504), ("3008", 3008)):
+            os.environ["DF2_DRAFT_BLOCK_SIZE"] = forced
+            try:
+                out = self.kcu.get_kv_cache_groups(Config("dflash"), all_specs(self.groups))
+            finally:
+                del os.environ["DF2_DRAFT_BLOCK_SIZE"]
+            self.assertEqual(out[-1].kv_cache_spec.block_size, expected, forced)
 
     def test_under_mtp_or_without_speculation_nothing_changes(self):
+        def shape(groups):
+            return [(g.layer_names, g.kv_cache_spec) for g in groups]
+
         for config in (Config("mtp"), Config(None)):
             out = self.kcu.get_kv_cache_groups(config, all_specs(self.groups))
-            self.assertEqual(out, self.groups)
+            self.assertEqual(shape(out), shape(self.groups))
+            self.assertEqual(out[-1].kv_cache_spec, DraftSpec(3008), "the image's block, untouched")
 
     def test_a_second_install_does_not_wrap_the_wrapper(self):
         wrapped = self.kcu.get_kv_cache_groups
