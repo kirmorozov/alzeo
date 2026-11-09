@@ -61,6 +61,23 @@ of 2048 and the non-causal block this drafter asks for. `FLASH_LOCAL_DRAFT_ATTEN
 `install-flash-local.sh` is the knob; empty leaves the choice to vLLM again. The capture plugin materializes each
 captured layer's completed state through the image's plain `hc_combine` op, which allocates its output, rather than
 the layer's workspace-bound method, so the pending triple the next layer reads is never written under it.
+
+**The drafter's layers each get their own KV cache group, so the pool's block is one drafter page, not five.** With
+Triton the boot of 2026-11-08 cleared every earlier gate and died at vLLM's last check: one request at the
+262,144-token window would need 35.77 GiB of KV cache, with 18.75 GiB available, where the MTP target's pool holds
+3.57 such requests. The cause is neither the drafter's weights nor FP8 against FP4. vLLM's hybrid cache draws every
+group's blocks from one pool and makes each block as large as the widest group needs, the pages of its layers
+summed. The image keeps each of the target's 49 layers in a group of its own (pages of 3,272,704 bytes at the
+3008-token block) and the drafter's five sliding-window layers together in one group; with 8 KV heads of 128
+against the target's 2 of 256 a drafter page is 6,160,384 bytes, so five of them made every block of the pool
+30,801,920 bytes (the stride of the first boot's message), and each target group held 3.27 MB of state in a block
+nine times that size. The plugin's `kvgroups` module wraps `get_kv_cache_groups` in `vllm.v1.core.kv_cache_utils`
+and splits any group made only of drafter layers (the image's own partition names them) one layer per group, which
+the image's DFlash speculator supports by design (one block table per draft group, each layer reading its own).
+A block is then one drafter page, and the same request costs about 7 GiB: the full window boots, with roughly
+half the MTP target's tokens of KV. Nothing changes for the MTP target or for any method but `dflash`, and a vLLM
+without the names the hook needs is logged and left alone. The lower waste of a drafter block matching the
+target's page (1504 tokens, half the target's block) stays open until the coordinator's block-size rules are read.
 ## v1.44.3 (2026-11-08): the local CI starts every job, and its pair tests take 16% less time
 
 **The local CI starts every job.** ci-local.sh runs the workflow's first six jobs side by side, each in a git worktree

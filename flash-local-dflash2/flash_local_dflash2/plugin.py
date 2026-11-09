@@ -22,6 +22,7 @@ def register() -> None:
 
     from .config import install
     from .kvdiag import install as install_kv_diagnostics
+    from .kvgroups import install as install_kv_groups
 
     # register_model overrides the image's entry for the arch; the lane serves
     # only this arch, and only on the CUDA build the image ships.
@@ -32,3 +33,6 @@ def register() -> None:
     install(MODELS_CONFIG_MAP)
     # Failure B reports strides without the specs behind them; this records them.
     install_kv_diagnostics()
+    # The drafter's five layers in one KV cache group size every block of the pool by
+    # their five pages; one group per layer keeps the window of the MTP target.
+    install_kv_groups()
