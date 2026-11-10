@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: flash-local-experts
+Version: 0.0.0
+Summary: Per-expert routing counter for the flash-local vLLM lane, read by the cockpit's Experts view

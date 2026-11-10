@@ -98,6 +98,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   --mount type=bind,source=__HOME__/.config/qwen38/api-key,target=/out/api-key,readonly \
   --mount type=bind,source=__HOME__/.config/qwen38/chat-template-flash-local.jinja,target=/out/chat-template-flash-local.jinja,readonly \
   -v __HOME__/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \
+  --mount type=bind,source=__HOME__/.config/qwen38/flash-local-experts,target=/opt/experts-plugin,readonly \
   __IMAGE__ \
   vllm serve __MODEL__ --revision __REV__ \
     --served-model-name qwen3.8-flash-next-fp4 \

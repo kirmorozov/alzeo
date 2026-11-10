@@ -75,6 +75,12 @@ def pre_dflash2_render(home, hf):
     text = PRE
     for ph, val in values.items():
         text = text.replace(ph, val)
+    # the routing counter the cockpit's Experts view reads (flash-local-experts/) came to both
+    # targets after the fixture: its two lines, the path entry and the mount, and nothing else
+    text = text.replace("-e PYTHONPATH=/opt/qwen38-auth -e", "-e PYTHONPATH=/opt/qwen38-auth:/opt/experts-plugin -e")
+    text = text.replace(f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n",
+                        f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n"
+                        f"  --mount type=bind,source={home}/.config/qwen38/flash-local-experts,target=/opt/experts-plugin,readonly \\\n")
     lines = [ln for ln in text.splitlines() if not re.fullmatch(r"\s*\\", ln)]
     return "\n".join(lines) + "\n"
 
@@ -101,6 +107,9 @@ class Box:
             self.repo.mkdir()
             for f in REPO_FILES:
                 (self.repo / f).write_text((REPO / f).read_text())
+            # the routing counter both targets mount is in every checkout this stop is about
+            shutil.copytree(REPO / "flash-local-experts", self.repo / "flash-local-experts",
+                            ignore=shutil.ignore_patterns("__pycache__"))
         else:
             self.repo = REPO
 
@@ -162,7 +171,7 @@ class TheFlashLocalUnitStaysTodays(unittest.TestCase):
         unit = self.box.out.read_text()
         self.assertIn("--speculative-config.method mtp --speculative-config.num_speculative_tokens 4", unit)
         self.assertIn("-e VLLM_MXFP8_LM_HEAD=1", unit)
-        self.assertIn("-e PYTHONPATH=/opt/qwen38-auth -e QWEN38_KEY_FILE", unit)
+        self.assertIn("-e PYTHONPATH=/opt/qwen38-auth:/opt/experts-plugin -e QWEN38_KEY_FILE", unit)
         self.assertNotIn("df2-plugin", unit)
         self.assertNotIn("DFlash2", unit)
 
@@ -280,7 +289,7 @@ class TheDflash2Target(unittest.TestCase):
         unit = self.box.out.read_text()
         self.assertIn(f"--mount type=bind,source={self.box.home}/.config/qwen38/flash-local-dflash2,"
                       "target=/opt/df2-plugin,readonly \\", unit)
-        self.assertIn("-e PYTHONPATH=/opt/qwen38-auth:/opt/df2-plugin", unit)
+        self.assertIn("-e PYTHONPATH=/opt/qwen38-auth:/opt/experts-plugin:/opt/df2-plugin", unit)
         # the copy, whole folder, what the mount reads at the start: the repo's plugin, file
         # for file, and nothing else
         self.assertTrue(self.box.plugin_marker().is_file())

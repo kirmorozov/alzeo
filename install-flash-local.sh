@@ -368,13 +368,13 @@ esac
 LOCAL_IMAGE="$FLASH_LOCAL_IMAGE"
 LM_HEAD_LINE="-e VLLM_MXFP8_LM_HEAD=1 "
 CACHE_DIR="$CONFIG_DIR/flash-local-cache"
-PYTHONPATH_LINE="/opt/qwen38-auth"
+PYTHONPATH_LINE="/opt/qwen38-auth:/opt/experts-plugin"
 PLUGIN_MOUNT=""
 DRAFT_FILES=""
 if [ "$VARIANT" = dflash2 ]; then
   LM_HEAD_LINE=""
   CACHE_DIR="$CONFIG_DIR/flash-local-cache-dflash2"
-  PYTHONPATH_LINE="/opt/qwen38-auth:/opt/df2-plugin"
+  PYTHONPATH_LINE="/opt/qwen38-auth:/opt/experts-plugin:/opt/df2-plugin"
   PLUGIN_MOUNT="--mount type=bind,source=$CONFIG_DIR/flash-local-dflash2,target=/opt/df2-plugin,readonly"
   # What the check of the unit's files asks for besides the checkpoint and the table's copies:
   # the drafter's snapshot, its config and its one weights file, non-empty, in the cache the
@@ -437,6 +437,25 @@ refuse_window(){
   die "the 1M window's overrides could not be written (the line above says why). Nothing was changed: the lane keeps" \
       "its window, and FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --units-only sets the native one"
 }
+# The per-expert routing counter the unit mounts read-only at /opt/experts-plugin (flash-local-experts/
+# in this checkout, the cockpit's Experts view reads what it writes): its copy under the config
+# directory, made again when the checkout's differs, so a lane loaded from a newer checkout runs the
+# newer counter. Every file of the copy is one the engine reads at its start (vlane_put_unit): a copy
+# changed under a serving lane is a restart owed, said as the unit's own changes are.
+experts_files(){
+  (cd "$HERE/flash-local-experts" && find . -type f -not -path '*/__pycache__/*' | sed 's|^\./||' | sort)
+}
+put_experts_plugin(){
+  [ -d "$HERE/flash-local-experts" ] \
+    || die "the routing counter is not in this checkout (no flash-local-experts/ beside this script): this copy of the repo is partial, and the lane's unit mounts that folder"
+  if ! diff -rq -x __pycache__ "$HERE/flash-local-experts" "$CONFIG_DIR/flash-local-experts" >/dev/null 2>&1; then
+    rm -rf "$CONFIG_DIR/flash-local-experts"
+    cp -r "$HERE/flash-local-experts" "$CONFIG_DIR/flash-local-experts" \
+      || die "the routing counter could not be copied to $CONFIG_DIR/flash-local-experts (the lines above say why)"
+    find "$CONFIG_DIR/flash-local-experts" -name __pycache__ -type d -prune -exec rm -rf {} +
+  fi
+}
+
 render_unit(){
   local maxlen=262144 yarn="" rc=0
   if [ "$FLASH_LOCAL_CONTEXT" = 1m ]; then
@@ -486,15 +505,17 @@ install_service(){
   # the check of what the engine reads, the head of the unit's ExecStart (flash-local-files.sh says why)
   cmp -s "$HERE/flash-local-files.sh" "$CONFIG_DIR/flash-local-files.sh" \
     || install -m 755 "$HERE/flash-local-files.sh" "$CONFIG_DIR/flash-local-files.sh"
+  put_experts_plugin
   if [ "$VARIANT" = dflash2 ]; then lane_plugin; fi
   RENDER="$(mktemp)"; trap 'rm -f "$RENDER"' EXIT
   render_unit "$RENDER"
   # with what the engine reads at its start besides the unit: a lane started before they changed
   # serves the old ones (vllm-lane.sh); the 1M window's overrides among them when its unit reads
-  # them, and the dflash2 unit's capture plugin, every file of its copy, named like its key
-  # middleware is, so that a change of it says a restart is owed too
+  # them, the routing counter's files, and the dflash2 unit's capture plugin, every file of its
+  # copy, named like its key middleware is, so that a change of it says a restart is owed too
   local starts=("$CONFIG_DIR/seccomp-io-uring.json" "$TEMPLATE")
   ! grep -q -- '--hf-overrides' "$RENDER" || starts+=("$YARN_JSON")
+  for f in $(experts_files); do starts+=("$CONFIG_DIR/flash-local-experts/$f"); done
   if [ "$VARIANT" = dflash2 ]; then
     for f in $(plugin_files); do starts+=("$CONFIG_DIR/flash-local-dflash2/$f"); done
   fi
@@ -530,6 +551,7 @@ if [ "$MODE" = stage ]; then
   mkdir -p "$CACHE_DIR/vllm" "$CACHE_DIR/flashinfer" "$CACHE_DIR/b12x" "$CACHE_DIR/triton"
   [ -f "$CONFIG_DIR/seccomp-io-uring.json" ] || install -m 644 "$HERE/seccomp-io-uring.json" "$CONFIG_DIR/seccomp-io-uring.json"
   [ -f "$CONFIG_DIR/flash-local-files.sh" ] || install -m 755 "$HERE/flash-local-files.sh" "$CONFIG_DIR/flash-local-files.sh"
+  put_experts_plugin
   render_unit "$STAGE_OUT"
   grep -q '__[A-Z][A-Z0-9_]*__' "$STAGE_OUT" && die "the unit template still holds an unsubstituted placeholder"
   exit 0

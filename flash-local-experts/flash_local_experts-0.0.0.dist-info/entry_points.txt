@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+flash_local_experts = flash_local_experts.plugin:register

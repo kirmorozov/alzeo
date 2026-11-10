@@ -84,6 +84,236 @@ and both changes were run against the image's own spec classes on the box before
 in the engine's environment is the kill switch for the block (`off` keeps the image's, a number forces one that
 must divide the target's block); the split has none. Nothing changes for the MTP target or for any method but
 `dflash`, and a vLLM without the names the hook needs is logged and left alone.
+## Unreleased: the cockpit's Experts view, the routing of Qwen Next's experts as it happens
+
+**A heatmap over the model's stack.** The flash-local lane's engine now carries a small vLLM plugin of this repo,
+`flash-local-experts/`, mounted read-only at `/opt/experts-plugin` by its unit. It counts, per MoE layer, how many of
+the step's routed tokens went to each of the 512 experts, and writes the matrix twice a second to
+`/dev/shm/qwen38-experts.bin`, which the host reads in place since the unit runs with `--ipc=host`: no port, no
+request to the engine. The cockpit's new Experts view, in the rail between Traffic and Machine, draws it: a row per
+layer, a cell per expert, bright at four times an even share and dim below it, drawn over the stack as the engine's
+config describes it (the four hyper-connection streams, each layer's kind, GDN or QSA, the PLE layer, the embedding,
+the heads, the MTP head's own experts as a row of its own, and the draft the unit runs with). Four readouts above it:
+tokens through the experts a second, the share of experts used in the last second, what the busiest tenth of experts
+carries, and the hottest expert against an even share; a table of the eight hottest cells below; a tooltip per cell;
+and a switch between the last second and the whole run since the engine started. The view polls the file once a
+second while it is open, and the stream carries only the file's header, so no other tab pays for the 98 KB a second.
+The rail entry is there for a Qwen Next model, or for an engine that writes the counter, and for nothing else.
+
+**What it costs the engine.** The count hooks the capture slot vLLM's MoE router already has for its own
+routed-experts feature: one `index_add_` of a preallocated ones slice into a preallocated int32 matrix per MoE layer
+per step, and one asynchronous copy of the matrix to pinned host memory per step, no allocation and no host sync on
+the hot path. The MoE runs inside the `moe_forward` custom op, which `torch.compile` leaves opaque, so the compiled
+graph and the lane's cached AOT artifact are unchanged. The writer is a daemon thread that touches CPU memory and
+the file alone. Measured against the pinned image's own torch on the reference box's CPU: 3 us a call. The kill
+switch is `QWEN38_EXPERTS=0` in the unit's environment.
+
+**What changed on disk.** `install-flash-local.sh` copies the plugin folder to `~/.config/qwen38/flash-local-experts`
+at an install and at a switch, and lists its files among what the engine reads at its start, so a copy changed under
+a serving lane is a restart owed like the unit's own changes. A lane installed before this release serves on without
+the mount until its next Load from this checkout and a restart.
+
+## v1.46.0 (2026-11-10): the installer and the cockpit say that a star helps, and a 64 GB box's first install no longer says two false things
+
+**The one place the installer asks.** Alzeo is found by what its users say of it, and nothing in it said so. A run of
+the installer that ends whole now ends with one line: `If Alzeo serves you well, a star helps other owners find it:
+https://github.com/hasso5703/alzeo`. It is the run's last line, after the summary, at each of its four endings: an
+install or an update that serves, a box that boots another lane, `--no-start` and `--no-service`. It asks nothing and
+waits for nothing: no prompt, no reminder, no window. The installer started again for another lane does not print it.
+
+**What is new, from the cockpit.** The Repo panel of the Settings view has a new row, What's new: a link to the release
+notes on GitHub, and one sentence, that a star on GitHub helps other owners find the project, with a second link. The
+first link names the notes of the version
+this box runs once the latest release GitHub gave the cockpit's check is that version or a later one, and every
+release until then (a release is published after its code, a box can be offline, and the check can be off). They are
+two links in the page, which the user opens or not. The page itself asks GitHub nothing, and nothing pops up or comes
+back.
+
+Two review passes of the branch found faults in its first versions, corrected before the release. The page rebuilt
+the two links at every frame of its stream, about once a second, so a link lost the keyboard's focus and a click that
+straddled a frame: they now stay in the page and change only when their value does. The link named this version's
+notes before GitHub had them, between a push and its release, then relied on the check's "behind", which compares
+with the last install the box recorded: the two versions are now compared number by number. The correction of the
+first fault had dropped the two lines that fill the Mode and Usable pool share rows of the cockpit's own panel, which
+no test read: put back, with a test. SECURITY.md said the cockpit says nothing about releases once the check is
+off, which the new link made inexact. And the full CI's touch check, which taps where a finger lands, found the second
+link broken over two lines on three phones, its middle outside its own text: each link is short and one box now.
+
+**A 64 GB box's first install said two false things.** A new 64 GB DGX Spark ends its first install on Nemotron 3.5
+Bolt (since v1.40.0): the installer loads it the way the cockpit's Load does, and then ran `oc-fit-limits.py` against
+it. That tool fits opencode's limits to the KV pool of an SGLang engine, which it reads from `/server_info`. Bolt is
+served by vLLM, which has neither `/server_info` nor `/get_server_info`. So on a box with opencode on, the default, the
+fit failed on every such run, and the end of the install said two false things. `no engine to read at
+http://127.0.0.1:30000 (HTTPError): start one first, the pool is only known once it has booted` was printed under a
+Bolt that served. Then `NOTE: opencode's limits were not fitted to Bolt; the cockpit's button fits them` named a button
+that answers, while Bolt serves, that Nemotron's opencode limits are its own and that there is nothing to fit to its
+pool. A 64 GB box that boots the 27B and is given `--recommended`, which loads Bolt the same way, got the same two
+lines. A box installed with `--no-opencode` did not: there the tool says that the integration is off, and stops.
+
+Nothing else was wrong on those boxes. Bolt's opencode limits are its own pair, 205,000 and 32,000, written with its
+provider before its engine starts, by the installer's opencode step or by the switch of the load. That switch points
+opencode at Bolt and restarts the Agent tab's server, if it runs, when the configs it reads changed. The fit had
+nothing to add, and never got past its read of the engine.
+
+Found by reading the code, not on a box: no 64 GB box was at hand, and the test of that ending replaced the tool with
+a stand-in that always succeeded. The tool was then run against a server that answers 404 to both routes, as vLLM
+does: return code 1, and that first line.
+
+The installer no longer runs the fit after Bolt's first load. After its summary the run says `Nemotron 3.5 Bolt serves
+now, and at boot; the 27B is a Load away in the cockpit`, then its record line and the line that says a star helps.
+
+**Three lanes by their official names in the installer's messages.** The messages of `install.sh` that name a lane (the
+lane a box boots, the lane that serves, a lane disabled at boot, a side lane that did not install) said `Kolibri`,
+`Nemotron` and `Nemotron Super` beside `Qwen3.8 Flash-Next FP4-Local` and `Ornith 1.5 122B` in the same blocks. They
+say `Kolibri-1`, `Nemotron 3.5 Bolt` and `Nemotron 3.5 Super VL`, the names the cockpit and the installer's own
+`lane_title` give those lanes. Its help keeps the short names, each followed by its model's full name, and the lane
+installers' own messages and the switch's keep them until the next release.
+
+**The tests' guard watches the video and speech lanes' ports.** This repo's tests run on boxes that serve, so
+the CI fails a run whose tests connect to a port the box serves on. Its list had seven ports, and neither the video
+lane's (30022) nor the speech lane's two (30024 and 30025). One test did connect to the video lane's: the cockpit's
+collectors test closed the engine, the proxy and the image lane, not the video lane, and its systemctl fixture says
+every unit is active, so the collector asked the box's own video lane for `/health`. Found under a probe that refuses
+every serving port before the call: one contact before, none now that the test closes that port too. The guard lists
+the three ports.
+
+CONTRIBUTING.md said that a full run of the CI takes about 12 minutes on the reference box, the measure of 2026-10-28
+that TESTING.md gives with its date. It took 30 on 2026-11-10, and both say so.
+
+**One table of the lanes.** Ornith 1.5 122B, the last lane added, touched 76 files in the six commits of its own, and
+the lists written by hand drift apart: the short names and the unwatched ports above were found on 2026-11-10 by
+listing every place that writes a lane. `lane_registry.py` now says once what each of the ten lanes is: its unit,
+installer and flags, what it serves and on which engine, its switch targets and the ones a 64 GB box does not take, the
+name it serves under, its opencode provider, its ports and its official name. `tests/test_lane_registry.py` holds to it
+the lists and tables written by hand in the installer, the switch, the other scripts, the unit templates, the proxy,
+opencode's scripts, the cockpit and its page, the sudoers, the CI and the other tests. Nothing reads the table at run
+time yet, so it changes nothing a box does. One drift it found is left for the next release, and excused in the test by
+its exact value: the cockpit's messages about the lanes on b12x say `the Nemotron lane` for both Nemotron lanes, and
+`the Ornith lane`.
+
+**Tests.** `tests/test_install_star_line.py` runs the installer's own function (one line that names the repository,
+nothing for a run started for another lane, nothing that reads, sleeps or calls out) and reads in `install.sh` that
+the line is called four times, each between a run's record and its exit. `dashboard/tests/test_page_details.py` loads
+the page and reads the row: the notes of the version that runs once a release at least as new is out, every release
+until then or when a version cannot be read, the same two nodes from one frame to the next, and the two rows of the
+cockpit's own panel. Both fail on the code before. Two checks of `tests/test_install_records_release.py`, which read
+the line before each exit, now read the record one line higher and refuse an exit that follows a record directly.
+
+`tests/test_spark_64.py` runs the installer's own ending for a 64 GB box, and its stand-in for the tool now answers as
+the tool does to a vLLM engine, one line and a return code of 1. A new check reads that nothing runs after the probe
+that finds Bolt answering and that the ending carries no NOTE. It fails on the code before.
+
+`tests/test_lane_registry.py` finds each place by its name, never by a line number, and fails on a
+place it cannot find or reads empty. It fails on the code before, on the three ports and on the three short names,
+and 176 mutations of a copy of the tree (a lane dropped from a list, a target renamed, a port moved, a served name
+changed, a lane added in one place only) all fail it.
+
+**What changes on a box.** `install.sh` (the star line's function and its four calls, two lines out and a comment in
+after Bolt's first load, 24 messages that name a lane), the cockpit's page (`index.html`, `ops.js` and two rules of
+`cockpit.css`), and one new file nothing reads yet, `lane_registry.py`. No unit, template or image changes.
+
+**What an update does.** The update runs get.sh, which starts the new installer, and ends with the new line. The
+cockpit restarts and serves the new page. The engine and the proxy keep running, as nothing they read changed. A box
+that boots or serves Kolibri-1, Nemotron 3.5 Bolt or Nemotron 3.5 Super VL reads those names in the update's messages.
+The 64 GB fix brings nothing to a 128 GB box, nor to a 64 GB box whose first install already ended whole: the two false
+lines were those of a first install, and of `--recommended` on a box that boots the 27B.
+
+**After the push.** GitHub's CI passed on 5b736cc, 89 steps, none skipped. The reference box updated in 1 min 36 s by
+the README's command (get.alzeo.ai): the 27B and the proxy kept running, the cockpit restarted and serves v1.46.0, and
+no lane's unit changed. The run ended on its record line and on the new one, `If Alzeo serves you well, a star helps
+other owners find it: https://github.com/hasso5703/alzeo`. On that cockpit, a desktop and a phone read the What's new
+row of the Repo panel: `The release notes. If Alzeo serves you well, a star on GitHub helps other owners find it.`, its
+first link to every release as this one was not published yet. The 27B was then restarted once, on purpose and outside
+the update: its KV pool is 902,659 tokens. On the 27B the production checks passed, and so did the eight real clients:
+Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The
+cockpit showed no banner on any of its views, and no JavaScript error. No lane, proxy, engine or unit file changed, so
+the client matrix was not run again.
+
+## v1.45.4 (2026-11-10): an update that raises opencode's limits leaves the Agent tab running, and eighteen more pages say what the code does
+
+**An update that raises opencode's limits leaves the Agent tab running.** Since v1.45.1 the installer's fit restarts
+the Agent tab's opencode server only when a limit has to come down, as limits it raises still fit while the server
+runs. The server restarted all the same: `dashboard/install-agent.sh`, which the installer runs after the fit,
+restarts opencode-web when one of the two configs it reads is newer than its start, and the fit had just rewritten
+them. So the turn the Agent tab was in ended at every update that followed a boot with a larger pool. The reference
+box shows it twice in its journal: at the update to v1.45.2 (limits raised at 16:41:42, opencode-web restarted at
+16:41:45) and at the update to v1.45.3 (21:34:06 and 21:34:09). The notes of v1.45.2 said the server had not been
+restarted. They were written from the fit's own message, not from the journal, and are corrected above.
+
+The fit now lists the configs it only raised in `~/.config/qwen38/opencode-web.kept`, one line each: which of the two
+files it is, the sha256 it left it with, and the start of the server that may keep running on what it read.
+`install-agent.sh` leaves out of its check a config listed for the server that runs. Nothing is listed for a file
+that something else changed since that start, and any change after the fit restarts the server as before, as do a
+new opencode, a changed unit or new credentials. The server reads the higher limits at its next start. One other
+fit of the installer, which follows an engine it has just restarted, still restarts it.
+
+A review of the branch found two faults in the first version of this record, corrected before the release. A line
+named no file, and the user's config is often the same bytes as this repo's own (the installer creates it as a
+copy): a copy made since the server's start was then vouched for by the other file's line. And a record that could
+not be read or written stopped the fit after it had written the limits.
+
+`tests/test_install_restarts.py` runs the script's guard as written against such configs, and the fit's own record
+against that guard: listed for the server that runs, for another server, changed again after the fit, one config of
+the two, the same bytes in the other file, a file dated the second the server started, a record that cannot be read,
+a newer opencode. It fails on the code before with either file put back. `tests/test_oc_fit_limits.py` runs the fit
+itself: two lines when it raised both configs of a server that had read them, none for files changed since the
+server's start, none when a limit came down (the server is restarted) and none without the installer's flag. It
+fails on the fit before.
+
+**What eighteen more pages said and the code did not, corrected.** A second audit read the lane pages and the other
+usage pages against the code behind each claim, every finding was checked again at its source before its fix, and a
+review of the corrections found two more pages and four sentences to make exact:
+- A 64 GB DGX Spark: `docs/context-1m.md` and the pages of the image, video, Kolibri, Super VL, Ornith, flash and
+  FP4-Local lanes said every plain install brings the 1M window or their lane. On a 64 GB box the installer leaves
+  these lanes out and refuses `CONTEXT_MODE=1m`, as the README's section on it says, and each page now says so.
+- `docs/systemone.md`: the flash lane reports cached tokens since v1.40.3, and the installer writes the prompt ceiling
+  into the unit and leaves a user's drop-in alone.
+- `docs/image-lane.md`: six local patches, three of them not about images, and the button is "Make a sample
+  reference".
+- `docs/ornith-lane.md`: `claude-local` sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS=1013000` and `max_tokens` 32,000 there
+  (opencode's 990,000 plus 23,000).
+- `docs/video-lane.md`: the cockpit refuses the requests the page lists with a 400 that says why, and drops undeclared
+  keys.
+- `docs/nemotron-lane.md`: the Decide view offers the 27B on a 64 GB box, and the key's middleware stays while any of
+  the four other vLLM lanes uses it.
+- `docs/opencode.md`: opencode's defaults already run every tool unasked, so dropping `--yolo` gives no prompt: the
+  way is `"*": "ask"` in the bash object, as docs/agents-and-network.md says. The installer also merges the shell deny
+  rules and a lean variant into the user's config, and CI runs the Agent view on arm64 with install.sh's digest.
+- `TESTING.md`: a run whose every step was skipped exits 3, the proxy's coverage floor is 85%, four gates need pip
+  packages, and the lifecycle tests are 285 (the page said 139).
+- `CONTRIBUTING.md`: ruff checks every tracked Python file, the gates are four, and the sleep-on-idle gate is the
+  SGLang text lanes' (the image and video lanes, on SGLang's diffusion runtime, do not take the flag). It reads the
+  27B's two 128 GB templates, the flash launcher and `run.sh`.
+- `ARCHITECTURE.md`: the SGLang text lanes carry `--sleep-on-idle`, `oc-limits.sh` has five callers, `check-pins.sh`
+  also runs daily, and the Ornith page is listed.
+- `MIRROR.md`: `check-pins.sh` watches the lanes the mirror does not cover yet.
+- `dashboard/CAPABILITIES.md`: a bay per lane, the switch as a step of a Load (there when the boot is not on that
+  target yet or the lane lacks a file it needs), a logs view that filters and copies, the opencode panel in Settings,
+  and two paired boxes since v1.42.0.
+- `extras/gguf/README.md`: the text lanes run on SGLang and vLLM, and the speech lane's recognizer is a GGUF on
+  llama.cpp.
+- `ROADMAP.md`: v1.40 to v1.45 shipped, and the coordination ports (v1.40.6) and the metrics panel (v1.22) leave the
+  planned list.
+
+**What changes on a box.** `oc-fit-limits.py` and `dashboard/install-agent.sh`, and one small file the fit writes
+beside opencode's config when it only raises the limits. No unit, template or image changes.
+
+**What an update does.** The update runs the new get.sh. The cockpit restarts and serves the new page. The engine and
+the proxy keep running, as nothing they read changed. The Agent tab's opencode server restarts if its limits come
+down, and keeps running if they go up or stay.
+
+**After the push.** GitHub's CI passed on b70dbdf, 89 steps, none skipped. The reference box updated in 1 min 32 s by
+the README's command (get.alzeo.ai): the 27B and the proxy kept running, the cockpit restarted and serves v1.45.4, and
+no lane's unit changed. To meet the case this release corrects, opencode's limits were first lowered on the box with
+the fit's own boot margin (`OC_BOOT_MARGIN=0.15`: 492,000 and 164,000 to 465,000 and 155,000), which restarted
+opencode-web at 03:38:34, as a limit that comes down does. The update's fit then raised them back to 492,000 and
+164,000 at 04:10:41 and listed both configs in `opencode-web.kept`, and the Agent tab's server kept running: its start
+is 03:38:34 in the snapshots taken before and after the update, and its journal shows no restart. On the 27B the
+production checks passed, and so did the eight real clients: Claude Code, opencode, Hermes, pi, the OpenAI and
+Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The cockpit showed no banner on any of its views, and no
+JavaScript error. No lane, proxy, engine or unit file changed, so the client matrix was not run again.
+
+
 ## v1.45.3 (2026-11-09): the documentation says what the code does, and the site lives at alzeo.ai
 
 **What the pages said and the code did not, corrected.** An audit read the eight most-read pages (README.md,
@@ -201,8 +431,9 @@ for byte, and the 27B served again.
 **After the push.** GitHub's CI passed on 498e100, 89 steps, none skipped. The reference box updated in 1 min 38 s by
 the README's command (get.alzeo.ai): the 27B, the lane that served, kept running, the proxy (v6.54) and the cockpit
 restarted, and no lane's unit changed: the nine were written again as they were, FP4-Local's included. opencode's
-limits were fitted to the pool of the boot that serves (558,000 and 186,000), and the Agent tab's server was not
-restarted. On the 27B the production checks passed, and so did the eight real clients: Claude Code, opencode, Hermes,
+limits were fitted to the pool of the boot that serves (558,000 and 186,000). The Agent tab's server restarted three
+seconds after that fit, at 16:41:45 in its journal: this note first said it was not restarted, which was wrong, and
+v1.45.4 corrects the note and the cause. On the 27B the production checks passed, and so did the eight real clients: Claude Code, opencode, Hermes,
 pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The client matrix on the two lanes
 this release changes passed 16 cases of 16: FP4-Local loaded from the cockpit's path in 612 s and the 27B again in
 213 s, eight clients on each. After it, opencode's FP4-Local entry was back at 205,000 and 32,000, "(local, 262K)". The

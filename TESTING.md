@@ -25,14 +25,15 @@ of HEAD, so `ci-local.sh` refuses a tree with changes nobody committed: commit f
 checkout as it is with `CI_LOCAL_SERIAL=1`. A fragment runs in the checkout as it is, one step
 after the other. A full run took 12 minutes on the reference box on 2026-10-28 (741 and 744 s,
 the length of `single`), against 63 one step after the other the same day (v1.40.4), and 72 on
-GitHub when the steps ran as one job (v1.40.3). On one machine the jobs share its ports, as they
+GitHub when the steps ran as one job (v1.40.3). On 2026-11-10 a full run took 30 minutes there
+(`single`, some 3,000 tests in one process, 1,808 s). On one machine the jobs share its ports, as they
 do not on GitHub, where each job has a runner of its own: a test takes the port of a server it starts
 from `tests/localports.py`, which keeps that port the test's beside the other jobs and any program of
 the machine, and `test_localports.py` fails on a test file that takes a port number out of a socket
 it closes. While working, run the gate you care about by name fragment, and the whole thing before
 pushing.
 
-The runtime is **stdlib only** and stays that way. Three measuring gates need pip
+The runtime is **stdlib only** and stays that way. Four measuring gates need pip
 packages (`coverage`, `hypothesis`); they ask `tests/testpy.sh` for an
 interpreter that has them, and a developer sets that up once:
 
@@ -55,8 +56,8 @@ fixed path in /tmp in any workflow: on a runner, which sets no TMPDIR, that is /
 step that calls `shellcheck`, `docker` or `gh` when the tool is not installed is reported
 SKIPPED (a stub records the call), and so is a step whose runner-only `pip install` line names a
 package this box cannot provide (`ruff` must be on `PATH`; the others are looked for through
-`tests/testpy.sh`). A skipped gate checked nothing, and a run in which every step was skipped
-still exits 0: read the last line, and a complete run ends with `0 sautes`
+`tests/testpy.sh`). A skipped gate checked nothing: a run in which every step it ran was skipped
+exits 3, but one in which only some were exits 0, so read the last line, and a complete run ends with `0 sautes`
 (`CI local: N ok, N echecs, N sautes`).
 
 ## The layers
@@ -102,7 +103,7 @@ was covered through a hand-built dict. The other five were malformed-timestamp
 paths, which is exactly what a truncated journal line produces.
 
 **And `lifecycle.py`, at 100% coverage, has a mutation score of 91.7%**: 17
-injected faults that its 139 tests do not notice, in code where every branch is
+injected faults that its 139 tests of 2026-09-10 did not notice (it has 285 now), in code where every branch is
 executed. That is the whole point. Coverage measures execution; only mutation
 measures detection.
 
@@ -154,7 +155,7 @@ And the root modules, which had no floor at all until 2026-09-10:
 
 | module | floor | why it is where it is |
 |---|---|---|
-| `keepalive-proxy.py` | 83% | the production serving path; the rest is socket teardown |
+| `keepalive-proxy.py` | 85% | the production serving path; the rest is socket teardown |
 | `patch-yarn.py` | 90% | it rewrites the config the engine reads |
 | `oc-fit-limits.py` | 37% | the arithmetic is property-tested, the CLI plumbing is not |
 | `build-token-map.py` | 35% | the ranking is tested; loading a real tokenizer is not offline work |

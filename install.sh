@@ -882,12 +882,12 @@ KOLIBRI_BOOT=0
 if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-kolibri.service 2>/dev/null \
    && [ "$SGL_ENABLED" -eq 0 ] && [ "$FLASH_ENABLED" -eq 0 ]; then
   if [ -n "$_ENV_MODEL_CHOICE" ]; then
-    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Kolibri lane: making that text lane the boot lane again."
+    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Kolibri-1 lane: making that text lane the boot lane again."
   elif [ "$RECOMMENDED" -eq 1 ]; then
-    echo "--recommended on a box booting the Kolibri lane: the 27B lane becomes the boot lane again, as on a new box."
+    echo "--recommended on a box booting the Kolibri-1 lane: the 27B lane becomes the boot lane again, as on a new box."
   else
     KOLIBRI_BOOT=1
-    echo "The Kolibri lane is this box's boot lane: this run brings the other lanes up to date"
+    echo "The Kolibri-1 lane is this box's boot lane: this run brings the other lanes up to date"
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
@@ -896,13 +896,13 @@ NEMOTRON_BOOT=0
 if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-nemotron.service 2>/dev/null \
    && [ "$SGL_ENABLED" -eq 0 ] && [ "$FLASH_ENABLED" -eq 0 ]; then
   if [ -n "$_ENV_MODEL_CHOICE" ]; then
-    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Nemotron lane: making that text lane the boot lane again."
+    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Nemotron 3.5 Bolt lane: making that text lane the boot lane again."
   elif [ "$RECOMMENDED" -eq 1 ] && [ "$MEM_CLASS" != 64 ]; then
-    echo "--recommended on a box booting the Nemotron lane: the 27B lane becomes the boot lane again, as on a new box."
+    echo "--recommended on a box booting the Nemotron 3.5 Bolt lane: the 27B lane becomes the boot lane again, as on a new box."
   else
     # (a new 64 GB box serves Bolt itself, so --recommended keeps it there)
     NEMOTRON_BOOT=1
-    echo "The Nemotron lane is this box's boot lane: this run brings the other lanes up to date"
+    echo "The Nemotron 3.5 Bolt lane is this box's boot lane: this run brings the other lanes up to date"
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
@@ -911,12 +911,12 @@ NEMOTRON_SUPER_BOOT=0
 if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-nemotron-super.service 2>/dev/null \
    && [ "$SGL_ENABLED" -eq 0 ] && [ "$FLASH_ENABLED" -eq 0 ]; then
   if [ -n "$_ENV_MODEL_CHOICE" ]; then
-    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Nemotron Super lane: making that text lane the boot lane again."
+    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Nemotron 3.5 Super VL lane: making that text lane the boot lane again."
   elif [ "$RECOMMENDED" -eq 1 ]; then
-    echo "--recommended on a box booting the Nemotron Super lane: the 27B lane becomes the boot lane again, as on a new box."
+    echo "--recommended on a box booting the Nemotron 3.5 Super VL lane: the 27B lane becomes the boot lane again, as on a new box."
   else
     NEMOTRON_SUPER_BOOT=1
-    echo "The Nemotron Super lane is this box's boot lane: this run brings the other lanes up to date"
+    echo "The Nemotron 3.5 Super VL lane is this box's boot lane: this run brings the other lanes up to date"
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
@@ -1791,11 +1791,11 @@ if [ -z "$SECONDARY" ] && ss -tlnH 2>/dev/null | awk '{print $4}' | grep -q ":$P
        || docker inspect qwen38-flash --format '{{json .HostConfig.PortBindings}}' 2>/dev/null | grep -q "\"${PORT}\""; then
     echo "Note: qwen38-flash is already running on :$PORT, installing over it ($([ "$LANE" = 27b ] && echo 'lane switch at the final step' || echo 'converging config'))."
   elif docker inspect qwen38-kolibri --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
-    echo "Note: the Kolibri lane is serving on :$PORT; this run updates the lanes beside it."
+    echo "Note: the Kolibri-1 lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-nemotron --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
-    echo "Note: the Nemotron lane is serving on :$PORT; this run updates the lanes beside it."
+    echo "Note: the Nemotron 3.5 Bolt lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-nemotron-super --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
-    echo "Note: the Nemotron Super lane is serving on :$PORT; this run updates the lanes beside it."
+    echo "Note: the Nemotron 3.5 Super VL lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-flash-local --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
     echo "Note: the Qwen3.8 Flash-Next FP4-Local lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-ornith-122b --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
@@ -2810,7 +2810,7 @@ if [ -d "$CONFIG_DIR/pi" ] || [ -d "$CONFIG_DIR/omp" ]; then
     || echo "NOTE: could not regenerate the pi/omp artifacts; run ./pi-gen.py by hand"
 fi
 # Every opencode.json this install touches has been written by now, except the limits
-# a 1m install fits to the pool once the engine is up (step 9, which restarts it again),
+# a 1m install fits to the pool once the engine is up (step 9, which restarts it again when a limit comes down),
 # so the server that reads them can be restarted. It parses opencode.json ONCE at startup and
 # never again (measured 2026-09-13: the file said 225,000 while the running
 # server still answered 175,000 on /config), so without this the Agent tab keeps
@@ -2957,6 +2957,13 @@ bolt_first_load() {  # Bolt loaded as the cockpit's Load does it; 0 when it answ
   sudo systemctl start "$UNIT_NAME" || true
   return 1
 }
+# One quiet line, the last of a run that ended whole (Hasan, 2026-11-09): the project is found by what its users say
+# of it, and this is the only place the installer says so. No prompt, no reminder, nothing the run waits for. Not
+# from the installer started again for another lane (SECONDARY): its end is not the run's.
+star_line() {
+  if [ -n "$SECONDARY" ]; then return 0; fi
+  echo "  If Alzeo serves you well, a star helps other owners find it: https://github.com/hasso5703/alzeo"
+}
 record_install() {  # $1 how the run ended: full, side-boot, no-start or no-service
   if [ -n "$SECONDARY" ]; then return 0; fi
   local chose=()
@@ -2985,6 +2992,7 @@ if [ "$NO_SERVICE" -eq 1 ]; then
   echo "  Remove that provider with the key, or opencode refuses to start."
   echo "  No cockpit either: it is a systemd unit, and --no-service installs none."
   record_install no-service
+  star_line
   exit 0
 fi
 
@@ -3148,16 +3156,16 @@ if [ -z "$SECONDARY" ] && [ "$VIDEO_BOOT" -eq 0 ] && systemctl is-enabled --quie
 fi
 # The Kolibri lane is the fifth, under the same rule.
 if [ -z "$SECONDARY" ] && [ "$KOLIBRI_BOOT" -eq 0 ] && systemctl is-enabled --quiet qwen38-kolibri.service 2>/dev/null; then
-  echo "disabling the Kolibri lane at boot (unit kept, switch back anytime from the cockpit)"
+  echo "disabling the Kolibri-1 lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-kolibri.service
 fi
 # The Nemotron lanes are the sixth and the seventh, under the same rule.
 if [ -z "$SECONDARY" ] && [ "$NEMOTRON_BOOT" -eq 0 ] && systemctl is-enabled --quiet qwen38-nemotron.service 2>/dev/null; then
-  echo "disabling the Nemotron lane at boot (unit kept, switch back anytime from the cockpit)"
+  echo "disabling the Nemotron 3.5 Bolt lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-nemotron.service
 fi
 if [ -z "$SECONDARY" ] && [ "$NEMOTRON_SUPER_BOOT" -eq 0 ] && systemctl is-enabled --quiet qwen38-nemotron-super.service 2>/dev/null; then
-  echo "disabling the Nemotron Super lane at boot (unit kept, switch back anytime from the cockpit)"
+  echo "disabling the Nemotron 3.5 Super VL lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-nemotron-super.service
 fi
 # The Qwen3.8 Flash-Next FP4-Local lane is the eighth, under the same rule.
@@ -3298,15 +3306,15 @@ else
   fi
   if [ "$WANT_KOLIBRI" -eq 1 ]; then
     "$REPO_DIR/install-kolibri.sh" "$(side_mode kolibri "$WITH_KOLIBRI")" \
-      || echo "NOTE: the Kolibri lane did not install or update; retry with ./install-kolibri.sh --no-smoke"
+      || echo "NOTE: the Kolibri-1 lane did not install or update; retry with ./install-kolibri.sh --no-smoke"
   fi
   if [ "$WANT_NEMOTRON" -eq 1 ]; then
     "$REPO_DIR/install-nemotron.sh" "$(side_mode nemotron "$WITH_NEMOTRON")" \
-      || echo "NOTE: the Nemotron lane did not install or update; retry with ./install-nemotron.sh --no-smoke"
+      || echo "NOTE: the Nemotron 3.5 Bolt lane did not install or update; retry with ./install-nemotron.sh --no-smoke"
   fi
   if [ "$WANT_NEMOTRON_SUPER" -eq 1 ]; then
     "$REPO_DIR/install-nemotron-super.sh" "$(side_mode nemotron-super "$WITH_NEMOTRON_SUPER")" \
-      || echo "NOTE: the Nemotron Super lane did not install or update; retry with ./install-nemotron-super.sh --no-smoke"
+      || echo "NOTE: the Nemotron 3.5 Super VL lane did not install or update; retry with ./install-nemotron-super.sh --no-smoke"
   fi
   if [ "$WANT_FLASH_LOCAL" -eq 1 ]; then
     "$REPO_DIR/install-flash-local.sh" "$(side_mode flash-local "$WITH_FLASH_LOCAL")" \
@@ -3319,9 +3327,9 @@ else
   SERVING_LANE=""
   [ "$IMAGE_BOOT" -eq 1 ] && SERVING_LANE="image"
   [ "$VIDEO_BOOT" -eq 1 ] && SERVING_LANE="video"
-  [ "$KOLIBRI_BOOT" -eq 1 ] && SERVING_LANE="Kolibri"
-  [ "$NEMOTRON_BOOT" -eq 1 ] && SERVING_LANE="Nemotron"
-  [ "$NEMOTRON_SUPER_BOOT" -eq 1 ] && SERVING_LANE="Nemotron Super"
+  [ "$KOLIBRI_BOOT" -eq 1 ] && SERVING_LANE="Kolibri-1"
+  [ "$NEMOTRON_BOOT" -eq 1 ] && SERVING_LANE="Nemotron 3.5 Bolt"
+  [ "$NEMOTRON_SUPER_BOOT" -eq 1 ] && SERVING_LANE="Nemotron 3.5 Super VL"
   [ "$FLASH_LOCAL_BOOT" -eq 1 ] && SERVING_LANE="Qwen3.8 Flash-Next FP4-Local"
   [ "$ORNITH_122B_BOOT" -eq 1 ] && SERVING_LANE="Ornith 1.5 122B"
   if [ -n "$ATS_CANNOT" ]; then
@@ -3392,6 +3400,7 @@ else
     esac
   fi
   record_install side-boot
+  star_line
   exit 0
 fi
 
@@ -3404,6 +3413,7 @@ if [ "$NO_START" -eq 1 ]; then
   echo "also start the keepalive proxy with: sudo systemctl start $KEEPALIVE_UNIT"
   [ "$COCKPIT" -eq 1 ] && echo "the cockpit is not installed on the --no-start path: ./dashboard/install-dashboard.sh once the engine runs"
   record_install no-start
+  star_line
   exit 0
 fi
 
@@ -3685,7 +3695,7 @@ except Exception as e:
       KOLIBRI_MODE="$(side_mode kolibri "$WITH_KOLIBRI")"
       if "$REPO_DIR/install-kolibri.sh" "$KOLIBRI_MODE"; then KOLIBRI_STATE=installed; [ "$KOLIBRI_MODE" = --units-only ] && KOLIBRI_STATE=units; else
         KOLIBRI_STATE=failed
-        echo "NOTE: the Kolibri lane did not install (the lines above say why); the rest goes on."
+        echo "NOTE: the Kolibri-1 lane did not install (the lines above say why); the rest goes on."
       fi
     fi
     if [ "$WANT_NEMOTRON" -eq 1 ]; then
@@ -3693,7 +3703,7 @@ except Exception as e:
       NEMOTRON_MODE="$(side_mode nemotron "$WITH_NEMOTRON")"
       if "$REPO_DIR/install-nemotron.sh" "$NEMOTRON_MODE"; then NEMOTRON_STATE=installed; [ "$NEMOTRON_MODE" = --units-only ] && NEMOTRON_STATE=units; else
         NEMOTRON_STATE=failed
-        echo "NOTE: the Nemotron lane did not install (the lines above say why); the rest goes on."
+        echo "NOTE: the Nemotron 3.5 Bolt lane did not install (the lines above say why); the rest goes on."
       fi
     fi
     if [ "$WANT_NEMOTRON_SUPER" -eq 1 ]; then
@@ -3701,7 +3711,7 @@ except Exception as e:
       NEMOTRON_SUPER_MODE="$(side_mode nemotron-super "$WITH_NEMOTRON_SUPER")"
       if "$REPO_DIR/install-nemotron-super.sh" "$NEMOTRON_SUPER_MODE"; then NEMOTRON_SUPER_STATE=installed; [ "$NEMOTRON_SUPER_MODE" = --units-only ] && NEMOTRON_SUPER_STATE=units; else
         NEMOTRON_SUPER_STATE=failed
-        echo "NOTE: the Nemotron Super lane did not install (the lines above say why); the rest goes on."
+        echo "NOTE: the Nemotron 3.5 Super VL lane did not install (the lines above say why); the rest goes on."
       fi
     fi
     if [ "$WANT_FLASH_LOCAL" -eq 1 ]; then
@@ -3897,8 +3907,12 @@ except Exception as e:
        && [ "$WANT_NEMOTRON" -eq 1 ] && { [ "$RECOMMENDED" -eq 1 ] || ! ran_whole_before; }; then
       step "A 64 GB DGX Spark serves Nemotron 3.5 Bolt: loading it as the cockpit does (the 27B stays installed)"
       if bolt_first_load; then
-        python3 "$REPO_DIR/oc-fit-limits.py" --engine "http://127.0.0.1:$PORT" --restart-agent \
-          || echo "  NOTE: opencode's limits were not fitted to Bolt; the cockpit's button fits them"
+        # Nothing is fitted here. Bolt's opencode limits are its own pair (oc-limits.sh nemotron), written with its
+        # provider at step 7 or by the switch above, which points opencode at Bolt and restarts the Agent tab's server
+        # when its configs changed. The fit that stood here reads SGLang's /server_info, which vLLM does not have: on
+        # a box with opencode on it failed each time, and the run's ending said "no engine to read ... start one
+        # first" under a Bolt that served, then gave a NOTE naming a cockpit button which, on this lane, answers that
+        # there is nothing to fit (read in the code, then run against a server that answers 404 as vLLM, 2026-11-10)
         echo "  Nemotron 3.5 Bolt serves now, and at boot; the 27B is a Load away in the cockpit"
       else
         echo "NOTE: Bolt did not come up (see above), so the 27B serves this box (if it was stopped, it starts"
@@ -3906,6 +3920,7 @@ except Exception as e:
       fi
     fi
     record_install full
+    star_line
     exit 0
   fi
   ST="$(systemctl is-active "$UNIT_NAME" || true)"
