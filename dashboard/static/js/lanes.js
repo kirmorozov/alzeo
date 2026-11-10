@@ -92,7 +92,7 @@ function renderLanes(){
     const st = e ? e.state : null, seated = !!(s && s[0] === unit);
     setText(c.h, LANE_META[unit].title + (seated ? ', serving' : ''));
     cap(c.state, !has ? 'not installed' : stateLabel(e) || 'unknown', has ? stateKind(st) : '', has ? stateLive(st) : false);
-    setText(c.desc, LANE_META[unit].desc + ' ' + LANE_META[unit].kind + '.');
+    setText(c.desc, LANE_META[unit].desc + ' ' + laneKind(unit) + '.');
     const served = laneTarget(unit);
     if (c.touched && served && served === c.target && (engines()[unit] || {}).state === 'ready') c.touched = false;
     if (!c.touched && served && c.target !== served) c.target = served;
@@ -174,6 +174,8 @@ function renderLanes(){
       // check, 2026-10-02)
       ['Checkpoint', pending ? F.model.split('/').pop() : e && e.model ? e.model.split('/').pop() : !has ? 'not installed' : e || F.life ? 'unknown' : '…'],
       ['Target', laneTarget(unit) ? TARGET_NAME[laneTarget(unit)] : null],
+      // the engine and its version the lane's installer pins (decision 1178)
+      ['Engine', engineLabel(unit) || null],
       ['Next start loads', pending ? TARGET_NAME[e.target] : null],
       ['At boot', has ? (en === 'enabled' ? 'starts' : en === '?' ? 'unknown' : 'manual start') : null],
       ['Boot takes', has ? readyIn(unit) : null],
@@ -196,6 +198,15 @@ function renderEngineFacts(){
     : s ? `The engine is ${STATE_LABEL[s[1].state] || s[1].state}: these facts arrive from the engine itself, once it answers.`
     : 'No engine is running.');
 }
+// each lane's engine, read again by the cockpit every 30 s (engineLabel in base.js)
+on('engine_table', d => {
+  F.engineTable = d.table || null;
+  // the engine facts' version, said again once the table is in: engine_info can come first in a frame
+  if (F.liveEngine) setText('eng-ver', engineLabel(F.liveEngine.unit) || $('eng-ver').textContent);
+});
+// the engine's word stops with its lane: kept, it named a stopped lane by the version of an engine gone (code
+// review of v1.45.0). Cleared here, where the lanes' states arrive, not read again in every label
+on('lifecycle', () => { if (F.liveEngine && (servingEngine() || [])[0] !== F.liveEngine.unit) F.liveEngine = null; });
 on('engine_info', d => {
   const i = d.info || {};
   setText('eng-model', (i.model_path || '…').split('/').pop()); setTitle('eng-model', i.model_path || '');
@@ -210,10 +221,15 @@ on('engine_info', d => {
     : i.speculative_num_draft_tokens != null ? `${i.speculative_algorithm}, ${i.speculative_num_draft_tokens} draft tokens` : i.speculative_algorithm);
   setText('eng-attn', i.prefill_attention_backend ? `${i.prefill_attention_backend} / ${i.decode_attention_backend}` : (i.attention_backend ?? 'n/a'));
   setText('eng-radix', i.mamba_radix_cache_strategy ?? 'n/a');
-  // which engine, named: SGLang gives a bare number, the Kolibri lane "vLLM 0.29.0" (the row read
-  // "SGLang vLLM 0.29.0" there: review, 2026-10-14)
+  // the version the serving engine reports, which engineLabel says for its lane (decision 1178)
+  // its unit: the target it names, or the lane that serves when it names none (a checkpoint no pin names)
+  const liveUnit = d.served_target ? TARGET_UNIT(d.served_target) : (servingEngine() || [])[0];
+  F.liveEngine = liveUnit && i.version ? {unit: liveUnit, version: i.version, window: i.context_length || 0} : null;
+  // which engine, named as everywhere else on the page: SGLang gives a bare number, the Kolibri lane "vLLM 0.29.0"
+  // (the row read "SGLang vLLM 0.29.0" there: review, 2026-10-14), the flash lane's nightly "0.0.0.dev1+g53295c697"
+  const named = F.liveEngine ? engineLabel(F.liveEngine.unit) : '';
   const ver = String(i.version ?? 'n/a').split('+')[0];
-  setText('eng-ver', /^\d/.test(ver) ? 'SGLang ' + ver : ver);
+  setText('eng-ver', named || (/^\d/.test(ver) ? 'SGLang ' + ver : ver));
 });
 on('containers', d => {
   const serving = Object.entries(d.containers || {}).find(([, c]) => c.image);
@@ -225,7 +241,7 @@ on('canary', d => {
   setText('px-probe', F.canaryTxt || '…');
   setText('px-last', d.skipped && (servingEngine() || [])[0] === KOLIBRI_UNIT ? 'none on the Kolibri lane'
     : d.skipped && isNemotron((servingEngine() || [])[0]) ? 'none on the Nemotron lanes'
-    : d.skipped && (servingEngine() || [])[0] === FLASH_LOCAL_UNIT ? 'none on the Flash FP4-Local lane'
+    : d.skipped && (servingEngine() || [])[0] === FLASH_LOCAL_UNIT ? 'none on the Qwen3.8 Flash-Next FP4-Local lane'
     : d.skipped && (servingEngine() || [])[0] === ORNITH_UNIT ? 'none on the Ornith lane'
     : d.last_ok ? clockTime(d.last_ok) : 'never in this cockpit’s life');
 });

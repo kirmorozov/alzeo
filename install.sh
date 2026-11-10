@@ -81,6 +81,15 @@ _ENV_PLE_DIR="${PLE_DIR:-}"; FLASH_TIER_ENV="${FLASH_TIER:-}"
 _ENV_SPEC_TOKEN_MAP_SIZE="${SPEC_TOKEN_MAP_SIZE:-}"; _ENV_FLASH_REPLAYSSM_SPEC="${FLASH_REPLAYSSM_SPEC:-}"
 _ENV_DRAFT2_REPO="${DRAFT2_REPO:-}"; _ENV_DRAFT2_REV="${DRAFT2_REV:-}"
 _ENV_DRAFT2_QUANT="${DRAFT2_QUANT:-}"; _ENV_DRAFT2_TOKENS="${DRAFT2_TOKENS:-}"
+# FLASH_LOCAL_CONTEXT, the Qwen3.8 Flash-Next FP4-Local lane's window, is set by its own installer and a Load: this run
+# sizes the clients from the lane's unit before it renders that unit again, so a window chosen here would have reached
+# the unit and not the clients (second review of v1.45.2). Not read, the unit rendered again serves the window it served:
+# it changes only when its checkpoint is not in the cache (a pin moved), and that unit starts no engine before the Load
+# that fetches the checkpoint and sets the clients for its window (flash-local-files.sh, switch-model.sh).
+if [ -n "${FLASH_LOCAL_CONTEXT+set}" ]; then
+  printf 'NOTE: FLASH_LOCAL_CONTEXT is not read by ./install.sh: run FLASH_LOCAL_CONTEXT=%s ./install-flash-local.sh --units-only,\n      then Load the lane (docs/flash-local-lane.md). This run keeps the window chosen before.\n' "$FLASH_LOCAL_CONTEXT"
+  unset FLASH_LOCAL_CONTEXT
+fi
 # the side lanes' checkpoints, which their installers read from the environment (2026-10-17)
 _ENV_KOLIBRI_VARIANT="${KOLIBRI_VARIANT:-}"; _ENV_IMAGE_MODEL="${IMAGE_MODEL:-}"; _ENV_VIDEO_VARIANT="${VIDEO_VARIANT:-}"; _ENV_FLASH_LOCAL_VARIANT="${FLASH_LOCAL_VARIANT:-}"
 # A run installs the text lane that does not serve as well, beside the one it serves: it
@@ -578,7 +587,7 @@ on vLLM, in the Nemotron lane's image: 77 beside it, else 102), the Flash
 FP4-Local lane (NVIDIA's FP4 build of the flash model, on vLLM, 121; 32 more
 when the HF cache is on another disk than the home directory's, for the copy
 of its n-gram table) and the Ornith 122B lane (Ornith AI's Ornith 1.5 122B,
-on vLLM, in the Flash FP4-Local lane's image: 78 beside it, else 96). The lane that
+on vLLM, in the Qwen3.8 Flash-Next FP4-Local lane's image: 78 beside it, else 96). The lane that
 serves proves it serves before the run ends; on a new box the 27B takes 58 GB
 of disk, about 39 GB of
 downloads (about 6 to 7 minutes at 100 MB/s). A lane installed whole (--all-weights, --with-<lane>)
@@ -611,7 +620,7 @@ without a terminal.
   --no-video            leave the MiniMax-H3 video lane out of this run (174 GB),
                         the same way (./install-video.sh --uninstall)
   --with-video          install it whole now and prove it
-  --no-flash            leave the flash 176B lane out of this run when it is not
+  --no-flash            leave the Qwen3.8 Flash-Next lane out of this run when it is not
                         the one serving (223 GB), the same way
   --with-flash          install it whole now beside the lane that serves
   --no-27b              leave the 27B lane out of this run when it is not the
@@ -626,7 +635,7 @@ without a terminal.
   --no-nemotron-super   leave the Nemotron 3.5 Super VL lane (vLLM, 102 GB) out of
                         this run, the same way (./install-nemotron-super.sh --uninstall)
   --with-nemotron-super install it whole now and prove it
-  --no-flash-local      leave the Flash FP4-Local lane (vLLM, 121 GB) out of this
+  --no-flash-local      leave the Qwen3.8 Flash-Next FP4-Local lane (vLLM, 121 GB) out of this
                         run, the same way (./install-flash-local.sh --uninstall)
   --with-flash-local    install it whole now and prove it
   --no-ornith-122b      leave the Ornith 1.5 122B lane (vLLM, 96 GB) out of this
@@ -911,17 +920,17 @@ if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-nemotron-super.ser
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
-# And the Flash FP4-Local lane, under the same promise.
+# And the Qwen3.8 Flash-Next FP4-Local lane, under the same promise.
 FLASH_LOCAL_BOOT=0
 if [ -z "$SECONDARY" ] && systemctl is-enabled --quiet qwen38-flash-local.service 2>/dev/null \
    && [ "$SGL_ENABLED" -eq 0 ] && [ "$FLASH_ENABLED" -eq 0 ]; then
   if [ -n "$_ENV_MODEL_CHOICE" ]; then
-    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Flash FP4-Local lane: making that text lane the boot lane again."
+    echo "MODEL_CHOICE=$_ENV_MODEL_CHOICE given on a box booting the Qwen3.8 Flash-Next FP4-Local lane: making that text lane the boot lane again."
   elif [ "$RECOMMENDED" -eq 1 ]; then
-    echo "--recommended on a box booting the Flash FP4-Local lane: the 27B lane becomes the boot lane again, as on a new box."
+    echo "--recommended on a box booting the Qwen3.8 Flash-Next FP4-Local lane: the 27B lane becomes the boot lane again, as on a new box."
   else
     FLASH_LOCAL_BOOT=1
-    echo "The Flash FP4-Local lane is this box's boot lane: this run brings the other lanes up to date"
+    echo "The Qwen3.8 Flash-Next FP4-Local lane is this box's boot lane: this run brings the other lanes up to date"
     echo "without making one of them the boot lane again. Switch from the cockpit when you want another."
   fi
 fi
@@ -1393,9 +1402,9 @@ fi
 # or not prepared (issue #57, below: LEFT_OUT).
 lane_title(){  # $1 a lane, by its flag's name: the name a run says
   case "$1" in
-    27b) echo "27B" ;; flash) echo "flash 176B" ;; image) echo "image (Qwen-Image 2.1)" ;;
+    27b) echo "Qwen3.8 27B" ;; flash) echo "Qwen3.8 Flash-Next" ;; image) echo "image (Qwen-Image 2.1)" ;;
     video) echo "video (MiniMax-H3)" ;; kolibri) echo "Kolibri-1" ;; nemotron) echo "Nemotron 3.5 Bolt" ;;
-    nemotron-super) echo "Nemotron 3.5 Super VL" ;; flash-local) echo "Flash FP4-Local" ;;
+    nemotron-super) echo "Nemotron 3.5 Super VL" ;; flash-local) echo "Qwen3.8 Flash-Next FP4-Local" ;;
     ornith-122b) echo "Ornith 1.5 122B" ;; *) echo "$1" ;;
   esac
 }
@@ -1490,7 +1499,7 @@ side_nemotron_begun(){  # $1 the lane's unit
   hf="$(unit_hf_cache "$1")"
   [ -n "$repo" ] && [ -n "$hf" ] && [ -d "$hf/hub/models--${repo//\//--}" ]
 }
-# The Flash FP4-Local lane is begun once its first Load began, as a Nemotron lane is: the image its
+# The Qwen3.8 Flash-Next FP4-Local lane is begun once its first Load began, as a Nemotron lane is: the image its
 # unit names (pulled by digest, the one digest in the unit) and its checkpoint in the cache the
 # unit mounts. The Ornith lane the same way: the two run one image, so the image alone says
 # nothing of either (the Nemotron lanes' lesson above).
@@ -1656,7 +1665,7 @@ fi
 # above: none of its downloads, nothing started, the box's port, cache and binds kept, read from that
 # same lane; named (--with-<lane>), or with --all-weights, it is updated whole. The other text lane
 # follows its own rule (step 6, whole only once prepared), and the rest of the box is updated.
-# Issue #57 (2026-10-21): a box booting Flash FP4-Local fetched the flash lane it had left out again,
+# Issue #57 (2026-10-21): a box booting Qwen3.8 Flash-Next FP4-Local fetched the flash lane it had left out again,
 # 35 and 136 GB, under "Leaving the flash lane out". A --no-<lane> no longer outlives its run, so a
 # lane not prepared is what keeps those downloads off the next one too.
 LEFT_OUT=0; LEFT_WHY=""
@@ -1788,7 +1797,7 @@ if [ -z "$SECONDARY" ] && ss -tlnH 2>/dev/null | awk '{print $4}' | grep -q ":$P
   elif docker inspect qwen38-nemotron-super --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
     echo "Note: the Nemotron Super lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-flash-local --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
-    echo "Note: the Flash FP4-Local lane is serving on :$PORT; this run updates the lanes beside it."
+    echo "Note: the Qwen3.8 Flash-Next FP4-Local lane is serving on :$PORT; this run updates the lanes beside it."
   elif docker inspect qwen38-ornith-122b --format '{{join .Args " "}}' 2>/dev/null | grep -qE -- "--port ${PORT}(\s|$)"; then
     echo "Note: the Ornith 1.5 122B lane is serving on :$PORT; this run updates the lanes beside it."
   else
@@ -1854,7 +1863,7 @@ fi
 # pin_tag, the local tag a digest pull needs to survive a docker image prune: in lanes.sh
 # (sourced above), which prepare-lane.sh shares for a lane prepared at its first Load.
 # A pin that moves takes its tag with it: unpin_stale, in lanes.sh too, which the lanes' own
-# installers share (the Flash FP4-Local lane's pulls its image by digest as this does).
+# installers share (the Qwen3.8 Flash-Next FP4-Local lane's pulls its image by digest as this does).
 pin_tag "$LANE" "$PULLED_IMAGE"
 if [ "$LANE" = "flash" ]; then pin_tag 27b "$IMAGE"; else pin_tag flash "$FLASH_IMAGE"; fi
 unpin_stale "$LANE" "$PULLED_IMAGE" || true
@@ -2369,14 +2378,16 @@ if [ "$OC_NEMOTRON_SUPER" -eq 1 ]; then
   OC_NEMOTRON_SUPER_CTX="${OC_NEMOTRON_SUPER_PAIR%% *}"; OC_NEMOTRON_SUPER_OUT="$(echo "$OC_NEMOTRON_SUPER_PAIR" | cut -d' ' -f2)"
   OC_NEMOTRON_SUPER_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label nemotron-super 1048576 || true)"
 fi
-# The Flash FP4-Local lane, its own provider (its own served model) with its unit.
+# The Qwen3.8 Flash-Next FP4-Local lane, its own provider (its own served model) with its unit.
 [ -f "$FLASH_LOCAL_UNIT_PATH" ] && OC_FLASH_LOCAL=1
-OC_FLASH_LOCAL_CTX=""; OC_FLASH_LOCAL_OUT=""; OC_FLASH_LOCAL_NAME=""
+OC_FLASH_LOCAL_CTX=""; OC_FLASH_LOCAL_OUT=""; OC_FLASH_LOCAL_NAME=""; OC_FLASH_LOCAL_WINDOW=""
 if [ "$OC_FLASH_LOCAL" -eq 1 ]; then
-  OC_FLASH_LOCAL_PAIR="$("$REPO_DIR/oc-limits.sh" flash-local)" \
+  # its unit's window: 1,048,576 tokens with FLASH_LOCAL_CONTEXT=1m (v1.45.2), the pair to match
+  OC_FLASH_LOCAL_WINDOW="$({ grep -oE -- '--max-model-len [0-9]+' "$FLASH_LOCAL_UNIT_PATH" 2>/dev/null || true; } | awk 'NR == 1 {print $2}')"
+  OC_FLASH_LOCAL_PAIR="$("$REPO_DIR/oc-limits.sh" flash-local --from "$FLASH_LOCAL_UNIT_PATH")" \
     || die "oc-limits.sh refused flash-local (repo bug: please open an issue)"
   OC_FLASH_LOCAL_CTX="${OC_FLASH_LOCAL_PAIR%% *}"; OC_FLASH_LOCAL_OUT="$(echo "$OC_FLASH_LOCAL_PAIR" | cut -d' ' -f2)"
-  OC_FLASH_LOCAL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-local 262144 || true)"
+  OC_FLASH_LOCAL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label flash-local "${OC_FLASH_LOCAL_WINDOW:-262144}" || true)"
 fi
 # The Ornith 1.5 122B lane, its own provider (its own served model) with its unit.
 [ -f "$ORNITH_122B_UNIT_PATH" ] && OC_ORNITH_122B=1
@@ -2751,6 +2762,13 @@ if [ -f "$OC_USER_CFG" ]; then
     # template this run patched, not from the context mode.
     python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" qwen38 qwen3.8-27b --add-variant lean || true
   fi
+  # The Qwen3.8 Flash-Next FP4-Local lane's pair follows its unit's window (FLASH_LOCAL_CONTEXT=1m): --add-providers
+  # above adds a missing provider only, and the compaction block is sized from this pair when the lane boots (second
+  # review of v1.45.2)
+  if [ "$OC_FLASH_LOCAL" -eq 1 ] && [ -n "$OC_FLASH_LOCAL_CTX" ]; then
+    python3 "$REPO_DIR/oc-merge-limits.py" "$OC_USER_CFG" flash-local qwen3.8-flash-next-fp4 \
+      "$OC_FLASH_LOCAL_CTX" "$OC_FLASH_LOCAL_OUT" >/dev/null || true
+  fi
 fi
 # The default model and the served entry's picker name follow the install, not
 # just the limits: an install that changes lane left opencode offering and
@@ -2771,8 +2789,8 @@ if [ "$NEMOTRON_SUPER_BOOT" -eq 1 ] && [ "$OC_NEMOTRON_SUPER" -eq 1 ]; then
   OC_POINT_LANE=nemotron-super; OC_POINT_CHOICE=nemotron-super; OC_POINT_WINDOW=1048576
 fi
 if [ "$FLASH_LOCAL_BOOT" -eq 1 ] && [ "$OC_FLASH_LOCAL" -eq 1 ]; then
-  # the Flash FP4-Local lane is this box's lane: opencode's default stays on it
-  OC_POINT_LANE=flash-local; OC_POINT_CHOICE=flash-local; OC_POINT_WINDOW=262144
+  # the Qwen3.8 Flash-Next FP4-Local lane is this box's lane: opencode's default stays on it
+  OC_POINT_LANE=flash-local; OC_POINT_CHOICE=flash-local; OC_POINT_WINDOW="${OC_FLASH_LOCAL_WINDOW:-262144}"
 fi
 if [ "$ORNITH_122B_BOOT" -eq 1 ] && [ "$OC_ORNITH_122B" -eq 1 ]; then
   # the Ornith 1.5 122B lane is this box's lane: opencode's default stays on it
@@ -3142,9 +3160,9 @@ if [ -z "$SECONDARY" ] && [ "$NEMOTRON_SUPER_BOOT" -eq 0 ] && systemctl is-enabl
   echo "disabling the Nemotron Super lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-nemotron-super.service
 fi
-# The Flash FP4-Local lane is the eighth, under the same rule.
+# The Qwen3.8 Flash-Next FP4-Local lane is the eighth, under the same rule.
 if [ -z "$SECONDARY" ] && [ "$FLASH_LOCAL_BOOT" -eq 0 ] && systemctl is-enabled --quiet qwen38-flash-local.service 2>/dev/null; then
-  echo "disabling the Flash FP4-Local lane at boot (unit kept, switch back anytime from the cockpit)"
+  echo "disabling the Qwen3.8 Flash-Next FP4-Local lane at boot (unit kept, switch back anytime from the cockpit)"
   sudo systemctl disable qwen38-flash-local.service
 fi
 # The Ornith 1.5 122B lane is the ninth, under the same rule.
@@ -3292,7 +3310,7 @@ else
   fi
   if [ "$WANT_FLASH_LOCAL" -eq 1 ]; then
     "$REPO_DIR/install-flash-local.sh" "$(side_mode flash-local "$WITH_FLASH_LOCAL")" \
-      || echo "NOTE: the Flash FP4-Local lane did not install or update; retry with ./install-flash-local.sh --no-smoke"
+      || echo "NOTE: the Qwen3.8 Flash-Next FP4-Local lane did not install or update; retry with ./install-flash-local.sh --no-smoke"
   fi
   if [ "$WANT_ORNITH_122B" -eq 1 ]; then
     "$REPO_DIR/install-ornith-122b.sh" "$(side_mode ornith-122b "$WITH_ORNITH_122B")" \
@@ -3304,7 +3322,7 @@ else
   [ "$KOLIBRI_BOOT" -eq 1 ] && SERVING_LANE="Kolibri"
   [ "$NEMOTRON_BOOT" -eq 1 ] && SERVING_LANE="Nemotron"
   [ "$NEMOTRON_SUPER_BOOT" -eq 1 ] && SERVING_LANE="Nemotron Super"
-  [ "$FLASH_LOCAL_BOOT" -eq 1 ] && SERVING_LANE="Flash FP4-Local"
+  [ "$FLASH_LOCAL_BOOT" -eq 1 ] && SERVING_LANE="Qwen3.8 Flash-Next FP4-Local"
   [ "$ORNITH_122B_BOOT" -eq 1 ] && SERVING_LANE="Ornith 1.5 122B"
   if [ -n "$ATS_CANNOT" ]; then
     step "Done: this box is up to date, and its flash lane, which this GPU cannot start, was not started"
@@ -3551,9 +3569,11 @@ except Exception as e:
     # was sized on, and the pair's worst case ran past it (found in review, 2026-10-23).
     if { [ "$CONTEXT_MODE" = "1m" ] || [ "$MEM_CLASS" = 64 ]; } && [ "$OPENCODE" -eq 1 ]; then
       echo "fitting the opencode limits to the KV pool this boot actually got:"
-      # --restart-agent: opencode-web was restarted above, before this fit rewrote its
-      # config, and it reads that config only at startup.
-      python3 "$REPO_DIR/oc-fit-limits.py" --engine "http://127.0.0.1:$PORT" --restart-agent \
+      # --restart-agent-if-lowered: opencode-web reads its config only at startup, so a limit this
+      # fit has to bring DOWN restarts it; limits it raises still fit as they run, and a restart ends
+      # the turn the Agent tab is in: every update cut it, the pool of this boot being larger than the
+      # one of the boot that set them (v1.44.3 on the reference box, 2026-11-08).
+      python3 "$REPO_DIR/oc-fit-limits.py" --engine "http://127.0.0.1:$PORT" --restart-agent-if-lowered \
         || echo "  NOTE: could not fit them; run python3 oc-fit-limits.py yourself, or the cockpit's button"
     fi
 
@@ -3685,11 +3705,11 @@ except Exception as e:
       fi
     fi
     if [ "$WANT_FLASH_LOCAL" -eq 1 ]; then
-      step "Flash FP4-Local lane (NVIDIA's FP4 build of the flash model, on vLLM with b12x)"
+      step "Qwen3.8 Flash-Next FP4-Local lane (NVIDIA's FP4 build of the flash model, on vLLM with b12x)"
       FLASH_LOCAL_MODE="$(side_mode flash-local "$WITH_FLASH_LOCAL")"
       if "$REPO_DIR/install-flash-local.sh" "$FLASH_LOCAL_MODE"; then FLASH_LOCAL_STATE=installed; [ "$FLASH_LOCAL_MODE" = --units-only ] && FLASH_LOCAL_STATE=units; else
         FLASH_LOCAL_STATE=failed
-        echo "NOTE: the Flash FP4-Local lane did not install (the lines above say why); the rest goes on."
+        echo "NOTE: the Qwen3.8 Flash-Next FP4-Local lane did not install (the lines above say why); the rest goes on."
       fi
     fi
     if [ "$WANT_ORNITH_122B" -eq 1 ]; then
@@ -3851,7 +3871,7 @@ except Exception as e:
       esac
     }
     if [ "$SECOND_LANE" = flash ]; then
-      lane_line "Flash 176B " "$SECOND_STATE" flash flash "223 GB" "$FLASH_UNIT_PATH"
+      lane_line "Flash-Next " "$SECOND_STATE" flash flash "223 GB" "$FLASH_UNIT_PATH"
     elif [ "$SECOND_LANE" = 27b ]; then
       lane_line "Qwen3.8 27B" "$SECOND_STATE" 27b stock "58 GB" "$SGL_UNIT_PATH"
     fi

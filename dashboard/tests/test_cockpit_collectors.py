@@ -1934,5 +1934,58 @@ class TheVllmLanesCountersAreReadToo(Base):
         self.assertIsNone(out["aborted"], "vLLM counts no client that left: not counted, which is not none")
 
 
+class WhereAClientSendsItsRequests(Base):
+    """Hasan (2026-10-18): the address to give a client, plain and in sight. collect_api reads the keepalive unit as
+    systemd runs it, whose environment holds keys: four fields leave it, nothing else."""
+
+    SHOW = ("ExecStart={ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /home/u/.config/qwen38/keepalive-proxy.py 30001 ; "
+            "ignore_errors=no ; start_time=[n/a] }\n"
+            "Environment=UPSTREAM=http://127.0.0.1:30000 PROXY_BIND=0.0.0.0 QWEN38_UPSTREAM_API_KEY=sekret-123 "
+            "QWEN38_TLS_CERT=/etc/ssl/box.pem QWEN38_CLIENT_KEYS_FILE=/home/u/.config/qwen38/client-keys\n")
+
+    IP = ("2: enP7s7    inet 192.168.1.20/24 brd 192.168.1.255 scope global dynamic enP7s7\\       valid_lft forever\n"
+          "3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\\       valid_lft forever\n"
+          "4: br-b5ac2d8eaf0e    inet 172.19.0.1/16 scope global br-b5ac2d8eaf0e\\       valid_lft forever\n"
+          "5: tailscale0    inet 100.101.102.103/32 scope global tailscale0\\       valid_lft forever\n")
+
+    def test_the_boxs_addresses_the_tailnets_first_and_no_container_bridge(self):
+        # the page opened on the box (127.0.0.1) has no other address to offer another machine (captures, 2026-11-09)
+        self.box({"show qwen38-keepalive.service": self.SHOW, "addr show scope global": self.IP})
+        self.assertEqual(self.cp.collect_api()["addresses"], [{"iface": "tailscale0", "addr": "100.101.102.103"},
+                                                              {"iface": "enP7s7", "addr": "192.168.1.20"}])
+
+    def test_its_port_its_interface_its_tls_and_its_client_keys(self):
+        self.box({"show qwen38-keepalive.service": self.SHOW})
+        d = self.cp.collect_api()
+        self.assertEqual({k: d[k] for k in ("known", "port", "bind", "tls", "client_keys")},
+                         {"known": True, "port": 30001, "bind": "0.0.0.0", "tls": True, "client_keys": True})
+        self.assertTrue(d["key_file"].endswith("api-key"))
+        self.assertNotIn("sekret", json.dumps(d))            # the unit's keys never reach the page
+
+    def test_the_environment_files_for_three_names_and_one_not_readable(self):
+        # the docs put the proxy's secrets in an EnvironmentFile, which systemctl show does not unfold (review of v1.45.1)
+        f = self.tmp / "proxy.env"
+        f.write_text("QWEN38_UPSTREAM_API_KEY=sekret-456\nexport QWEN38_TLS_CERT='/etc/ssl/box.pem'\n"
+                     "QWEN38_CLIENT_KEYS_FILE=/home/u/keys # client keys\n")
+        show = ("ExecStart={ argv[]=/usr/bin/python3 /x/keepalive-proxy.py 30001 ; }\nEnvironment=PROXY_BIND=0.0.0.0\n"
+                f"EnvironmentFiles={f} (ignore_errors=no)\n")
+        self.box({"show qwen38-keepalive.service": show})
+        d = self.cp.collect_api()
+        self.assertEqual((d["tls"], d["client_keys"], d["env_unread"]), (True, True, False))
+        self.assertNotIn("sekret", json.dumps(d))
+        self.box({"show qwen38-keepalive.service": show.replace(str(f), "/nonexistent/proxy.env")})
+        self.assertTrue(self.cp.collect_api()["env_unread"])
+        self.box({"show qwen38-keepalive.service": show.replace(str(f), "/nonexistent/proxy.env").replace("=no)", "=yes)")})
+        self.assertFalse(self.cp.collect_api()["env_unread"], "an optional file that is not there sets nothing")
+
+    def test_a_proxy_on_its_defaults_and_a_unit_not_read(self):
+        self.box({"show qwen38-keepalive.service": "ExecStart={ argv[]=/usr/bin/python3 /x/keepalive-proxy.py 30011 ; }\nEnvironment=\n"})
+        d = self.cp.collect_api()
+        self.assertEqual((d["port"], d["bind"], d["tls"], d["client_keys"]), (30011, "0.0.0.0", False, False))
+        self.box({})
+        d = self.cp.collect_api()
+        self.assertEqual((d["known"], d["port"], d["bind"]), (False, 30001, "0.0.0.0"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

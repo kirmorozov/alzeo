@@ -84,6 +84,248 @@ and both changes were run against the image's own spec classes on the box before
 in the engine's environment is the kill switch for the block (`off` keeps the image's, a number forces one that
 must divide the target's block); the split has none. Nothing changes for the MTP target or for any method but
 `dflash`, and a vLLM without the names the hook needs is logged and left alone.
+## v1.45.3 (2026-11-09): the documentation says what the code does, and the site lives at alzeo.ai
+
+**What the pages said and the code did not, corrected.** An audit read the eight most-read pages (README.md,
+docs/cockpit.md, docs/clients.md, docs/operations.md, the two flash lanes' pages, docs/pair.md and
+docs/engine-restarts.md) against the code behind each claim, a code review read the corrections, and every finding
+was checked again at its source before its fix:
+- `docs/operations.md`: keeping a box as it is takes a `--no-<lane>` for every lane the installer adds, the five vLLM
+  lanes included (`./install.sh --no-flash --no-image --no-video` alone still brought the units of Kolibri, Bolt, Super
+  VL, FP4-Local and Ornith); and only the SGLang lanes pass `--enable-metrics`, as vLLM serves `/metrics` by itself.
+- `docs/engine-restarts.md`: the proxy holds requests while any of the seven text lanes' units starts
+  (`PROXY_HOLD_UNITS`), not only the 27B's and the flash lane's; the vLLM units run the start guard too, and the
+  leftover engine it waits for can be vLLM's (`VLLM::EngineCore`, `vllm serve`) as well as SGLang's.
+- `README.md`: the Library view downloads a target's checkpoint and deletes stray revisions (it said its panels were
+  read-only); the 27B boots in 3.5 to 6.5 minutes, 7 to 8 for its FP8 and abliterated versions (one line still said 5
+  to 7 for all); seven text units share the engine's port, not five; flush and abort are calls with the box's key,
+  not sudo; the cockpit's backend is cockpit.py and six modules beside it, not a single file.
+- `ARCHITECTURE.md`: the same, flush is not on the cockpit's sudo path.
+- `docs/clients.md`: Claude Code's setting on the flash lane is `228000` (opencode's 205,000 plus the 23,000 Claude
+  Code keeps below its setting), as the same page's environment block and claude-local already gave; the FP4-Local
+  window has its 1M option since v1.45.2; the 250,000-token ceiling holds on either flash lane at its 262K window; and
+  each lane's window is named: 262,144 tokens on most lanes, 1,010,000 on the 27B in 1M mode, 1,048,576 on Super VL,
+  Ornith, and FP4-Local with its 1M option.
+- `docs/flash-local-lane.md`: `--uninstall` keeps the seccomp filter while the Ornith 1.5 122B lane, which reads it
+  too, is installed.
+- `docs/cockpit.md`: the same backend sentence as the README.
+
+Four checks in `tests/test_docs_facts.py` read these facts from the code and fail when the sentences that state them
+say otherwise: the keep-as-is command names a `--no-<lane>` for every lane `install.sh` adds; the README's and
+docs/engine-restarts.md's counts of the text units and of the vLLM lanes are the number of units in `PROXY_HOLD_UNITS`
+and of the units the cockpit's engine table says run vLLM; no page calls the cockpit's backend a single file, and a
+page that counts its modules gives the number cockpit.py imports; while `sudoers-cockpit.template` has no rule for
+flush or abort, the README's list of what goes through sudo names neither, any other clause of that paragraph that
+names one says the key it is called with, and no line of ARCHITECTURE.md that names sudo, nor the line after it, names
+them. Each fails on the pages as v1.45.2 has them and on the rewordings three reviews tried against it; a sentence
+wrapped onto two lines, or a right count written in digits, passes.
+
+**The 27B's quality on the engine it serves.** The README gives the 27B lane's GSM8K, IFEval and tool-calling scores
+measured with v1.2.1 (2026-08-20). It now adds SGLang's own GSM8K on SGLang 0.5.22 without torch.compile, as v1.44.0
+serves it: 99.2 % on 250 problems, the test set's 6th to 255th (`sglang.test.run_eval`, 2026-11-05, the run
+BENCHMARKS.md records), with a note that the table's GSM8K (200 problems, v1.2.1's engine) is no before and after
+for it.
+
+**The site's address.** The README links the project's site at https://alzeo.ai/, where hasso5703.github.io now
+redirects.
+
+**What changes on a box.** Documentation and one test file: README.md, ARCHITECTURE.md, five pages of docs/ and
+`tests/test_docs_facts.py`. No script, unit, template or image changes.
+
+**After the push.** GitHub's CI passed on b36d1be, 89 steps, none skipped. The reference box updated in 1 min 37 s by
+the README's command (get.alzeo.ai): the 27B and the proxy kept running, the cockpit restarted and serves v1.45.3, and
+no lane's unit changed. The box had booted again earlier that evening with a KV pool of 702,327 tokens, so the update's
+fit raised opencode's limits (421,000 and 140,000 to 436,000 and 145,000). The Agent tab's server restarted then,
+although v1.45.1 says raised limits leave it running: the fit left it alone, and the cockpit's step restarted it three
+seconds later because the two configs it reads had just been rewritten. That is a defect of v1.45.1 which this update
+showed, and the next release corrects it. On the 27B the production checks passed, and so did the eight real clients:
+Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The
+cockpit showed no banner on any of its views, and no JavaScript error. No lane, proxy, engine or unit file changed, so
+the client matrix was not run again.
+
+## v1.45.2 (2026-11-09): the Flash-Next FP4-Local lane can serve a window of 1,048,576 tokens
+
+**A window of 1,048,576 tokens on the Qwen3.8 Flash-Next FP4-Local lane, as an option (discussion #63).** The model's
+card says it extends to 1,000,000 tokens and gives no recipe for it. `FLASH_LOCAL_CONTEXT=1m ./install-flash-local.sh
+--units-only`, then a Load of the lane, serves 1,048,576 tokens: YaRN, a factor of 4 over the native 262,144 with the
+model's multimodal RoPE kept, and `--max-model-len 1048576`, with the lane's own image, flags and memory share. Measured
+on the reference box: ready in 406 s, a KV pool of 1,061,819 tokens, a passphrase hidden in filler retrieved 8 times of
+8 at 131K, 262K, 524K and 1,036,576 tokens (608 s to the first token at the last), and at least 15.1 GiB of memory left.
+On GSM8K (250 questions, 8 at a time), where every prompt is short, the lane scores 96.8 % at its native window and
+97.6 % with YaRN, the same within the noise of 250 questions, at the same speed (107 and 111 tokens a second out). It is
+not the default: its makers ship 262,144, and the 1M window is measured here on retrieval and on GSM8K only.
+`FLASH_LOCAL_CONTEXT=native` brings 262,144 back.
+
+The choice is kept for the Loads after, which stage the unit with none of your environment, and `--prepare` keeps it
+too, once checked against a checkpoint already in the cache. The unit reads its overrides at its start from `~/.config/qwen38/flash-local-yarn.json`, written from the pinned
+checkpoint's own RoPE and only when they change. A choice whose checkpoint has another RoPE than the one measured is
+refused, and nothing of it is kept. A choice kept from before that a checkpoint refuses serves the native window, and
+the Load says why. Any other fault, a config that does not parse or a file that cannot be written, stops the Load and
+says what it is. Before the checkpoint is in the cache, the unit keeps the native window, and the Load that fetches it
+sets the 1M one. `--uninstall` removes the choice and the overrides with the lane. `./install.sh` does not read
+`FLASH_LOCAL_CONTEXT` and says so: it sizes the clients from the lane's unit before it renders that unit again, so an
+update keeps the window chosen.
+
+At 1M, the proxy (v6.54) relays a prompt up to 92 % of the pool, about 976,000 tokens. The 250,000-token ceiling it
+keeps on this lane at its native window is for that window. It reads the engine's window on `/v1/models` with the names
+it serves, as the cockpit does. A Load gives opencode, pi and `claude-local` 840,000 tokens of context and 32,000 for
+the answer, in both opencode configs, whether the lane's entry was there or not, and keeps 205,000 verbatim at a
+compaction. That pair fits the cockpit's check with a pool 10 % smaller than the one measured. The cockpit's Lanes and
+Now views say 1M tokens of context, from the engine for the lane that serves and from its unit for the others. Three
+code reviews of the branch found the proxy's ceiling, the clients' limits, the choice kept before its check, a fault
+taken for the checkpoint's refusal and the window the page said: each is fixed, with a test that fails on the code
+before.
+
+**The docs.** The cockpit's tour (docs/cockpit.md) and the clients page (docs/clients.md) start from the "Connect a
+client" panel. The README gives the 27B's later boots as the cockpit counts them on the reference box (3.5 to 6.5
+minutes for the default version, a median of 3 min 43 s over twelve, about 7 to 8 for its abliterated and FP8 versions) and
+its speed of today, 65 to 68 tokens a second. Its two captures of the cockpit are of v1.45.1, with the name Alzeo and
+each version's official name: they were of v1.37.0.
+
+**The tests.** The finger test of the cockpit's drawer aims again until two aims in a row agree, then taps: on a loaded
+machine the drawer was still settling, and "settings" was tapped where "logs" then stood.
+
+**What an update does.** The proxy (v6.54) and the cockpit restart. The engine that serves keeps running. A box that
+has not chosen the 1M window keeps its FP4-Local unit as it was. An install and a Load now set opencode's limits for
+the FP4-Local lane as they do for the 27B and the flash lane: the native pair, 205,000 and 32,000, in place of numbers
+edited by hand, with a dated backup of the file.
+
+**Before the push.** On the reference box, with this release's code, the 1M window by the lane's own path: the
+installer rendered the unit, systemd started it, and the lane served after 465 s with a window of 1,048,576 tokens
+read on the engine and a KV pool of 1,080,529. The same prompt of 350,056 tokens was refused by v1.45.1's proxy (400,
+too long for the lane) and relayed by v6.54 (200), and a passphrase hidden at 600,061 tokens was retrieved through
+v6.54. A Load's opencode block, run on copies of the box's two configs, wrote 840,000 and 32,000 with the label
+"(local, 1M)" and a compaction keeping 205,000. Back to native, the unit rendered again was the one installed, byte
+for byte, and the 27B served again.
+
+**After the push.** GitHub's CI passed on 498e100, 89 steps, none skipped. The reference box updated in 1 min 38 s by
+the README's command (get.alzeo.ai): the 27B, the lane that served, kept running, the proxy (v6.54) and the cockpit
+restarted, and no lane's unit changed: the nine were written again as they were, FP4-Local's included. opencode's
+limits were fitted to the pool of the boot that serves (558,000 and 186,000), and the Agent tab's server was not
+restarted. On the 27B the production checks passed, and so did the eight real clients: Claude Code, opencode, Hermes,
+pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The client matrix on the two lanes
+this release changes passed 16 cases of 16: FP4-Local loaded from the cockpit's path in 612 s and the 27B again in
+213 s, eight clients on each. After it, opencode's FP4-Local entry was back at 205,000 and 32,000, "(local, 262K)". The
+cockpit showed no banner on any of its views, and no JavaScript error.
+
+## v1.45.1 (2026-11-09): the cockpit says where a client sends its requests, and an update no longer cuts the Agent tab
+
+**The cockpit says where a client sends its requests.** Nothing on the page said what to give a client: the address,
+the model, the key. A "Connect a client" panel in the Now view says it, ready to copy: the OpenAI address
+(`http://<the address you opened the cockpit by>:30001/v1`) and the Anthropic one, the model that serves, and where the
+key is (the cockpit's login, in `~/.config/qwen38/api-key` on the box, or with client keys on, one of them: the proxy
+then refuses any other), never the key itself. On a proxy that listens on
+the box alone (`PROXY_BIND=127.0.0.1`) it says so, and how to open it, and with a certificate it says https. Opened
+on the box itself, it lists the addresses another machine reaches the box by, the tailnet's first. Its buttons copy
+the address, `claude-local` (which sets Claude Code up for the lane that serves) and a test request that reads the key
+from its file, and it links every client's setup (docs/clients.md). The cockpit reads the proxy's port, interface,
+certificate and client keys from its unit and its environment files every 30 s, and nothing else of them, which hold keys,
+and the box's addresses from `ip`, container bridges left out.
+
+**An update no longer cuts the Agent tab.** The installer fits opencode's limits to the KV pool of the boot that serves,
+and restarted the Agent tab's opencode server whenever they changed, which ended the turn it was in: on the reference
+box every update did, the pool of the boot that serves being larger than the one of the boot that had set them
+(498,000/166,000 to 555,000/185,000 on the update to v1.44.3). Limits lower than the pool allows still fit as the server
+runs: the installer now restarts it only when a limit has to come down, and the server reads the higher ones at its
+next start. The cockpit's "Fit opencode's limits" button still restarts it. `tests/test_oc_fit_limits.py` fails on the
+code before.
+
+**The docs and the installers name each version and engine as the cockpit does.** The README, BENCHMARKS.md, the model
+pages and the lane pages name each version as its makers publish it (Qwen3.8 27B NVFP4 · RadixArk, Qwen3.8 Flash-Next
+abliterated NVFP4 · dealignai, Qwen3.8 Flash-Next FP4-Local · NVIDIA...) with the engine each lane runs and its version
+(SGLang 0.5.22, SGLang nightly 53295c6, vLLM b12x build 8244d1c, vLLM 0.29.0 + Aleph Alpha plugin 1.0.0, vLLM nightly
+77154ca6 + b12x 1.5.1, SGLang Diffusion 0.5.21). The installers, switch-model.sh and uninstall.sh say "the Qwen3.8
+Flash-Next FP4-Local lane" and name its Load button as the cockpit does, install.sh's summary of the lanes says
+"Flash-Next" where it said "Flash 176B", and its other sentences "Qwen3.8 27B" and "Qwen3.8 Flash-Next". The ids
+commands take (`stock`, `uncensored`, `flash`, `flash-local`...) do not change.
+
+**What an update does.** The update runs the new get.sh. The cockpit restarts and serves the new page. The engine and
+the proxy keep running, as nothing they read changed, and the Agent tab's opencode server restarts only if its limits
+come down.
+
+**After the push.** GitHub's CI passed on d534bb5, 89 steps, none skipped. The reference box updated in 1 min 34 s by
+the README's command (get.alzeo.ai): the engine and the proxy kept running, and the cockpit restarted. The Agent tab's
+opencode-web restarted too, the case this release keeps: the 27B had just booted again with a smaller pool (880,902
+tokens against 894,954), so opencode's limits came down (555,000/185,000 to 547,000/182,000). On the 27B the production
+checks passed, and so did the eight real clients: Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs,
+fetch under Node and under Bun, and LiteLLM. The cockpit showed no banner on any of its views.
+
+## v1.45.0 (2026-11-09): the cockpit names each lane's engine and each version by its official name, and fits every screen
+
+**Each lane says its engine and its version.** The cockpit names the engine each lane runs, with its version, wherever
+the lane appears: first on the second line of the header's capsule ("SGLang 0.5.22 · idle, KV pool 3 %, up 2 h"), at
+the head of each bay's facts in Now, in an Engine row on each Lanes card, and in the Library's recipes, whose column
+is now named Engine, when a recipe runs the image its lane pins. The lane that serves says the version its engine
+reports: the pinned image reads as the versions below, and an image of yours is named by its own version, never by
+the pin's. The Lanes engine facts said "SGLang 0.0.0.dev1" for the flash lane's nightly: they now say "SGLang nightly
+53295c6". The versions, each read in the pinned image on the reference box: SGLang 0.5.22 (Qwen3.8 27B), SGLang
+nightly 53295c6 (Qwen3.8 Flash-Next), vLLM b12x build 8244d1c (Qwen3.8 Flash-Next FP4-Local and Ornith 1.5 122B),
+vLLM 0.29.0 + Aleph Alpha plugin 1.0.0 (Kolibri-1), vLLM nightly 77154ca6 + b12x 1.5.1 (Nemotron 3.5 Bolt and Super
+VL), SGLang Diffusion 0.5.21 (image and video). `dashboard/tests/test_engines.py` reads each pin back from its
+installer and fails when one moves without the table. A lane whose unit starts another image than its installer
+pins, an image of yours, is not given the pin's version: it says "vLLM, another image". A unit that starts the moving
+tag of its pin, the one install.sh offers when the digest cannot be pulled (`IMAGE=lmsysorg/sglang:v0.5.22`), runs the
+pin. The cockpit reads each unit again every 30 s, so a lane installed on its own after the cockpit started is said as
+it is.
+
+**Each version has its official name.** The cockpit said "27B stock" and "flash 176B", names of our own. Each version
+is now named as its makers publish it, with its precision and who publishes the build, read off the repository its
+installer pins: Qwen3.8 27B NVFP4 · RadixArk, Qwen3.8 27B FP8 · Qwen, Qwen3.8 Flash-Next NVFP4 · RadixArk, Qwen3.8
+Flash-Next NVFP4 · NVIDIA, Qwen3.8 Flash-Next FP4-Local · NVIDIA, Kolibri-1 FP8 · Aleph Alpha, Nemotron 3.5 Super VL
+NVFP4 · NVIDIA, Ornith 1.5 122B NVFP4 · Ornith AI, Qwen-Image 2.1 · Qwen, MiniMax-H3 · MiniMax, and the others the
+same way. The builds with refusals removed are "abliterated", the word of their makers (Qwen3.8 27B abliterated NVFP4
+· edp1096), never "uncensored". The ids commands take (`stock`, `uncensored`, `flash`...) do not change.
+`dashboard/tests/test_target_names.py` reads each name back from the pinned repository and finds no old name in any
+text of the page: it fails on the page before.
+
+**The cockpit fits every screen, from a phone to a 34-inch one.** On a screen wider than 1560 px the page stopped
+there and left the rest of the screen empty (a user's capture at 2563 px, issue #64). It now grows up to 3200 px, then
+stays centred, and its lists take more columns: four bays a row in Now from 1900 px and five from 2600 px, the Lanes
+cards two by two from 2300 px, the four Machine panels on one row from 3000 px. Now starts with the memory pool:
+"Now" in 40 px over a sentence that said the capsule again took about 100 px above it. Its title stays for screen
+readers, and how far a long prompt has got (issue #61), which only that sentence said, is in the Activity panel. Every
+other view says its name in 24 px with its sentence beside it. The header's capsule is as wide as its text: on a
+MacBook it grew to its 560 px whatever it said, and left a gap before Change lane. On a phone or a tablet held upright
+it still fills its row, and says the lane's family and its state ("Qwen3.8 27B, ready"): the whole name pushed the
+state out of it. A bay's title breaks before the version's precision and publisher, never right after its " · ", and
+the four versions of Qwen3.8 27B stand two by two instead of three and one, and one under the other on a phone, where
+two columns of their names ran off the screen. Each view was captured
+before and after at ten sizes, from a 3440 px screen to a 375 px phone (2560 and 1920 px screens, two MacBooks at
+1512 x 982 and 1440 x 900, an iPad on its side and upright, phones of 430 and 393 px), and looked at: no line runs
+off the screen, and the page reports no error.
+
+**A Stop says it stops.** The window at the bottom right that follows an action said "starting…" under "Stop" while
+systemctl stopped the lane, its toast said "started", and its log "(no output yet)" after the stop had ended with exit
+code 0 (issue #64): systemctl prints nothing, and the page said nothing else. The window now says what the action does
+("stopping, nothing printed yet"), its log starts with the command it runs and says "(it printed nothing)" once it
+ended, the confirmation says "sending…" until the cockpit answers, and the toast "running".
+`dashboard/tests/test_page_details.py` fails on the page before.
+
+**An update keeps your files where the release puts its own.** get.sh resets the clone to the release. A file of
+yours that git does not track (untracked or ignored) where the release puts something of its own was said "kept in
+place", then written over or removed by the reset: a file at a path the release adds (a note, an AGENTS.md an
+agent wrote), a folder of yours where the release puts a file, a file of yours where it needs a folder. Each is now
+copied aside first, into a folder of its own under `~/.local/share/alzeo/` that the update names, and a copy that
+fails stops the update before its reset. Off main, FORCE_UPDATE=1 looks before it switches to main, whose checkout
+writes over ignored files too, and the switch is forced once those files are copied aside: an untracked file of yours
+at a path main tracks made it fail, then its fallback said a branch named main already exists (exit code 128). A link
+of yours where the release needs a folder is kept as a link, and what lies past it, which is not the clone's, is
+neither copied nor counted. The list of untracked files kept in place no longer names what the update replaced,
+whatever its name, and both lists say how many more there are past their first five. `tests/test_get_sh.py` (cases
+3b to 3g) and `tests/test_get_sh_force_update.py` fail on the get.sh before.
+
+**The cockpit watches all of its own code.** It says when its code on disk changed under it, and engine_metrics.py,
+one of its modules, was not watched. A test reads the cockpit's imports and fails when one of its own modules is not.
+
+**What an update does.** The update runs the new get.sh. The cockpit restarts and serves the new page. Nothing else
+this release ships is read by an engine, the proxy or the Agent tab's opencode-web.
+
+**After the push.** GitHub's CI passed on 396b028, 89 steps, none skipped. The reference box updated in 1 min 37 s by
+the README's command (get.alzeo.ai): the engine, the proxy and the Agent tab's opencode-web kept running, as nothing
+they read changed and opencode's limits already fitted the pool, and the cockpit restarted. On the 27B the production
+checks passed, and so did the eight real clients: Claude Code, opencode, Hermes, pi, the OpenAI and Anthropic SDKs,
+fetch under Node and under Bun, and LiteLLM. The cockpit showed no banner on any of its views.
+
 ## v1.44.3 (2026-11-08): the local CI starts every job, and its pair tests take 16% less time
 
 **The local CI starts every job.** ci-local.sh runs the workflow's first six jobs side by side, each in a git worktree

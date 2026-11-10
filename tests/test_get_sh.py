@@ -95,6 +95,115 @@ def main() -> None:
         assert "Untracked files kept in place" in r.stdout, r.stdout
         os.remove(note)
 
+        # 3b. An untracked file at a path the new release TRACKS: the reset writes the release's file over it.
+        #     It was said "kept in place", then lost (third review of v1.40.8, 2026-11-01). It is copied aside
+        #     under the user's own dated folder first, said, and no longer listed as kept in place (v1.45.0).
+        pub = os.path.join(base, "publisher")
+        git("clone", "-q", os.path.join(base, "hasso5703", "dgx-spark-qwen38.git"), pub, cwd=base)
+        for k, v in (("user.email", "t@t"), ("user.name", "t")):
+            git("config", k, v, cwd=pub)
+        with open(os.path.join(pub, "AGENTS.md"), "w") as f:
+            f.write("the release's own\n")
+        git("add", "AGENTS.md", cwd=pub); git("commit", "-qm", "the release adds AGENTS.md", cwd=pub)
+        git("push", "-q", "origin", "main", cwd=pub)
+        mine = os.path.join(work, "AGENTS.md")
+        with open(mine, "w") as f:
+            f.write("an agent wrote this here\n")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        assert open(mine).read() == "the release's own\n", "the release's file is not in place"
+        kept = [os.path.join(d, "AGENTS.md") for d in
+                (os.path.join(base, ".local/share/alzeo", n) for n in os.listdir(os.path.join(base, ".local/share/alzeo")))]
+        assert len(kept) == 1 and open(kept[0]).read() == "an agent wrote this here\n", kept
+        assert "copied aside first to:" in r.stdout and os.path.dirname(kept[0]) in r.stdout, r.stdout
+        assert "AGENTS.md" not in r.stdout.split("Untracked files kept in place")[-1] or \
+            "Untracked files kept in place" not in r.stdout, r.stdout
+        shutil.rmtree(os.path.join(base, ".local/share/alzeo"))
+
+        def kept_files():
+            root = os.path.join(base, ".local/share/alzeo")
+            return {os.path.relpath(os.path.join(dp, f), os.path.join(root, os.listdir(root)[0])):
+                    open(os.path.join(dp, f)).read() for dp, _, fs in os.walk(root) for f in fs} if os.path.isdir(root) else {}
+
+        def kept_in_place(out):
+            """The names under "Untracked files kept in place", up to the line that says where the clone is."""
+            if "Untracked files kept in place" not in out:
+                return []
+            listed = out.split("Untracked files kept in place", 1)[1].split("── At:", 1)[0]
+            return [ln.strip() for ln in listed.splitlines()[1:] if ln.startswith("     ")]
+
+        def publish(path, text, msg):
+            os.makedirs(os.path.dirname(os.path.join(pub, path)) or pub, exist_ok=True)
+            with open(os.path.join(pub, path), "w") as f:
+                f.write(text)
+            git("add", path, cwd=pub); git("commit", "-qm", msg, cwd=pub); git("push", "-q", "origin", "main", cwd=pub)
+
+        # 3c. A file of the user's where the release puts a folder (the release adds extra/notes.md, the user has a
+        #     file named extra): only exact paths were compared, nothing was copied, and the reset removed it
+        #     (code review of v1.45.0).
+        with open(os.path.join(work, "extra"), "w") as f:
+            f.write("my file named extra\n")
+        publish("extra/notes.md", "the release's notes\n", "the release adds extra/")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        assert open(os.path.join(work, "extra", "notes.md")).read() == "the release's notes\n"
+        assert kept_files() == {"extra": "my file named extra\n"}, kept_files()
+        shutil.rmtree(os.path.join(base, ".local/share/alzeo"))
+
+        # 3d. A folder of the user's where the release puts a file (the release adds a file named drafts, the user has
+        #     drafts/idea.txt): its files are copied aside before the reset removes the folder.
+        os.makedirs(os.path.join(work, "drafts"))
+        with open(os.path.join(work, "drafts", "idea.txt"), "w") as f:
+            f.write("my idea\n")
+        publish("drafts", "the release's drafts file\n", "the release adds a file named drafts")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        assert open(os.path.join(work, "drafts")).read() == "the release's drafts file\n"
+        assert kept_files() == {"drafts/idea.txt": "my idea\n"}, kept_files()
+        # and the folder the reset removed is not said kept in place (code review of v1.45.0)
+        assert not [n for n in kept_in_place(r.stdout) if n.startswith("drafts")], r.stdout
+        shutil.rmtree(os.path.join(base, ".local/share/alzeo"))
+
+        # 3e. A name out of ASCII: copied aside, and not said "kept in place" too (the two lists quoted it two ways)
+        with open(os.path.join(work, "notes-\u00e9.md"), "w") as f:
+            f.write("mine, accented\n")
+        publish("notes-\u00e9.md", "the release's\n", "the release adds an accented name")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        assert kept_files() == {"notes-\u00e9.md": "mine, accented\n"}, kept_files()
+        assert not [n for n in kept_in_place(r.stdout) if n.startswith("notes-")], r.stdout
+        shutil.rmtree(os.path.join(base, ".local/share/alzeo"))
+
+        # 3f. A name git quotes even with core.quotePath=false (a double quote in it): copied aside, and not said kept
+        #     in place too (code review of v1.45.0)
+        with open(os.path.join(work, 'say "hi".md'), "w") as f:
+            f.write("mine, quoted\n")
+        publish('say "hi".md', "the release's\n", "the release adds a quoted name")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        assert kept_files() == {'say "hi".md': "mine, quoted\n"}, kept_files()
+        assert not [n for n in kept_in_place(r.stdout) if "say" in n], r.stdout
+        shutil.rmtree(os.path.join(base, ".local/share/alzeo"))
+
+        # 3g. A link of the user's where the release needs a folder: the link is what the reset replaces, kept; what
+        #     lies past it is not the clone's, and is neither copied nor counted (third review of v1.45.0)
+        outside = os.path.join(base, "elsewhere")
+        os.makedirs(outside)
+        with open(os.path.join(outside, "plan.md"), "w") as f:
+            f.write("not the clone's\n")
+        os.symlink(outside, os.path.join(work, "linked"))
+        publish("linked/plan.md", "the release's plan\n", "the release adds linked/")
+        r = run_get(work)
+        assert r.returncode == 0, f"the update failed: {r.stderr}"
+        root = os.path.join(base, ".local/share/alzeo")
+        copied = [os.path.relpath(os.path.join(dp, n), os.path.join(root, os.listdir(root)[0]))
+                  for dp, ds, fs in os.walk(root) for n in fs + [d for d in ds if os.path.islink(os.path.join(dp, d))]]
+        assert copied == ["linked"], copied
+        assert "── 1 file(s) of yours" in r.stdout, r.stdout
+        assert open(os.path.join(outside, "plan.md")).read() == "not the clone's\n"
+        assert open(os.path.join(work, "linked", "plan.md")).read() == "the release's plan\n"
+        shutil.rmtree(root)
+
         # 4. A modified tracked file DOES block, and says so.
         with open(os.path.join(work, "install.sh"), "a") as f:
             f.write("# local edit\n")
@@ -319,8 +428,10 @@ def main() -> None:
         r = run_get(many)
         assert r.returncode == 0 and "INSTALL_RAN" in r.stdout, f"3000 untracked files: rc {r.returncode}: {r.stdout[-200:]}"
         assert "Untracked files kept in place" in r.stdout and "── At:" in r.stdout, r.stdout[-300:]
-        shown = [ln[5:] for ln in r.stdout.splitlines() if ln.startswith("     ")]
+        shown = [ln[5:] for ln in r.stdout.splitlines() if ln.startswith("     ") and not ln.startswith("     ... and ")]
         assert shown == kept[:5], f"the five listed are not the first five: {shown}"
+        # and how many more there are, said (code review of v1.45.0: five names and nothing about the others)
+        assert f"     ... and {len(kept) - 5} more" in r.stdout, r.stdout[-300:]
         # a folder untracked whole is named once (--directory), not file by file
         folder = os.path.join(base, "folder")
         git("clone", "-q", bare, folder, cwd=base)

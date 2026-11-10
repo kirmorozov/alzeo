@@ -92,7 +92,7 @@ const BAYS = new Map();
 function bay(unit){
   let b = BAYS.get(unit); if (b) return b;
   const root = el('button', 'bay'); root.type = 'button'; root.setAttribute('role', 'listitem');
-  const top = el('div', 'top'); const state = el('span', 'cap'); const kind = el('p', 'kind', LANE_META[unit].kind);
+  const top = el('div', 'top'); const state = el('span', 'cap'); const kind = el('p', 'kind', laneKind(unit));
   top.append(makerMark(unit), state);
   const h = el('h3', null, LANE_META[unit].title);
   const desc = el('p', 'desc', LANE_META[unit].desc);
@@ -101,7 +101,7 @@ function bay(unit){
   const foot = el('div', 'foot'); const act = el('span', 'act'); const note = el('span', 'faint'); note.style.fontSize = '12px';
   foot.append(note, act);
   root.append(top, h, kind, desc, boot, line, foot);
-  b = {root, state, h, desc, boot, line, act, note, sig: ''};
+  b = {root, state, h, kind, desc, boot, line, act, note, sig: ''};
   root.addEventListener('click', () => {
     const e = engines()[unit];
     if (!installed(unit)) return toast(`${LANE_NAME[unit]} is not installed on this box. ${installHint(unit)}`, 'warn', 8000);
@@ -123,11 +123,11 @@ function renderRack(){
       + (st === 'failed' || st === 'wedged' || st === 'orphan' ? ' broken' : '') + (!has ? ' absent' : '');
     cap(b.state, !has ? 'not installed' : stateLabel(e), !has ? '' : stateKind(st), !has ? false : stateLive(st));
     const t = laneTarget(unit);
-    // the version after the lane's name, unless the name already says it: the Nemotron lane's card read
-    // "Nemotron 3.5 Bolt Bolt" (found on the reference box, 2026-10-16), and the FP4-Local lane's, whose
-    // name says its version without ending with it, "Flash FP4-Local (NVIDIA) FP4-Local" (2026-10-20)
-    const title = LANE_META[unit].title, short = t && TARGET_SHORT[t];
-    setText(b.h, title + (short && !['image', 'video', 'flash'].includes(t) && !` ${title} `.includes(` ${short} `) ? ` ${short}` : ''));
+    // its version's official name once the lane says which it loads, the lane's own title before (decision 1180):
+    // the title and a short version after it read "Nemotron 3.5 Bolt Bolt", and named the 27B's default by its id
+    const full = (t && TARGET_NAME[t]) || LANE_META[unit].title, [fam, rest] = nameParts(full, unit);
+    if (b.h.textContent !== full){ clear(b.h); b.h.append(fam); if (rest) b.h.append(' ', el('span', 'ver', rest)); }
+    setText(b.kind, laneKind(unit));
     // the boot bar, when it boots
     if (e && TRANSITIONAL.has(st)){
       b.boot.hidden = false; clear(b.boot);
@@ -138,9 +138,10 @@ function renderRack(){
       b.boot.hidden = false; clear(b.boot);
       const m = el('div', 'meter indet'); m.append(el('i')); b.boot.append(m);
     } else b.boot.hidden = true;
-    // facts: what this lane costs, measured on this box
+    // facts: the engine it runs (decision 1178), then what this lane costs, measured on this box
     clear(b.line);
     const fact = (k, v) => { const sp = el('span'); sp.append(k + ' '); sp.append(el('b', null, v)); b.line.append(sp); };
+    if (engineLabel(unit)) fact('engine', engineLabel(unit));
     if (e) fact('boot', fmtMin(bootSeconds(unit)));
     const pool = e ? lanePool(unit, e) : null;
     if (pool) fact('KV pool', fmtK(pool));
@@ -182,7 +183,7 @@ function soonBay(){
   if (b27 && rack.firstChild !== SOON_BAY) rack.insertBefore(SOON_BAY, rack.firstChild);
 }
 
-// ── the spine's serving capsule and the lede ──────────────────────────────────
+// ── the spine's serving capsule ───────────────────────────────────────────────
 function renderServing(){
   const s = servingEngine();
   if (!s){
@@ -192,7 +193,6 @@ function renderServing(){
     const u = bootUnit();
     setText('serving-sub', !F.units || !Object.keys(F.units).length ? '' : u ? `${LANE_NAME[u]} starts at boot; load a lane from Lanes`
       : bootKnown() ? 'no lane starts at boot; load one from Lanes' : 'load a lane from Lanes');
-    setText('now-lede', 'No lane holds the box right now. Pick one in the rack to load it.');
     sayOnce('lane', 'nothing serving');
     return;
   }
@@ -202,7 +202,10 @@ function renderServing(){
   const mark = $('serving-mark'), src = `/static/img/logos/${LANE_META[unit].maker}.svg`;
   if (mark.firstChild.getAttribute('src') !== src) mark.firstChild.setAttribute('src', src);
   mark.hidden = false;
-  setText('serving-name', `${laneLabel(unit)}, ${stateLabel(e)}`);
+  const [fam, rest] = nameParts(laneLabel(unit), unit), nm = $('serving-name');
+  if (nm.textContent !== `${fam}${rest ? ' ' + rest : ''}, ${stateLabel(e)}`){
+    clear(nm); nm.append(fam); if (rest) nm.append(el('span', 'ver', ' ' + rest)); nm.append(`, ${stateLabel(e)}`);
+  }
   let sub = '';
   const l = F.load || {};
   if ((st === 'ready' || st === 'degraded') && unit === VIDEO_UNIT) sub = VID_NOW.label || 'idle, one video at a time';
@@ -210,21 +213,69 @@ function renderServing(){
   else if (st === 'ready' || st === 'degraded') sub = (loadWords(l) || 'idle') + (F.pool ? `, KV pool ${Math.round(100 * physTokens(l) / F.pool)} %` : '') + (e.elapsed ? `, up ${fmtDur(e.elapsed)}` : '');
   else if (TRANSITIONAL.has(st)){ const eta = e.eta || READY_DEFAULT[unit]; sub = `${fmtDur(e.elapsed)} elapsed` + (eta && e.elapsed ? `, about ${fmtDur(Math.max(0, eta - e.elapsed))} left` : ''); }
   else if (st === 'stopping') sub = `${e.state_elapsed != null ? fmtDur(e.state_elapsed) : ''} elapsed`;
-  setText('serving-sub', sub);
+  // the engine first, what it does after: « SGLang 0.5.22 · idle, KV pool 3 %, up 2 h » (decision 1178)
+  setText('serving-sub', [engineLabel(unit), sub].filter(Boolean).join(' · '));
   sayOnce('lane', `${laneLabel(unit)}: ${stateLabel(e)}`);
-  // the lede: one sentence about the box, in words
-  let lede;
-  if (e.zombie) lede = `${laneLabel(unit)} lost its scheduler: its server answers nothing.`;
-  else if (e.held) lede = `${laneLabel(unit)} is not up yet: it waits for the last engine's GPU memory to come back.`;
-  else if (st === 'ready' || st === 'degraded') lede = `${laneLabel(unit)} holds the box` + (e.elapsed ? ` and has served for ${fmtDur(e.elapsed)}` : '') + '. ' +
-    (unit === VIDEO_UNIT ? (VID_NOW.label ? `It is ${VID_NOW.label}.` : 'It is idle.') : unit === IMAGE_UNIT ? (IMG_NOW.label ? `It is ${IMG_NOW.label}.` : 'It is idle.')
-      : (runningReqs(l) ? `${runningReqs(l)} request${runningReqs(l) > 1 ? 's are' : ' is'} running` : 'No request is running')
-        + (F.prompt && runningReqs(l) === 1 ? `, ${promptWords(F.prompt)}` : '')
-        + (waitingReqs(l) ? `, ${waitingReqs(l)} waiting.` : '.'));
-  else if (TRANSITIONAL.has(st)) lede = `${laneLabel(unit)} is booting: ${STATE_LABEL[st]}.`;
-  else if (st === 'stopping') lede = `${laneLabel(unit)} is stopping.`;
-  else lede = `${laneLabel(unit)} is ${STATE_LABEL[st] || st}.`;
-  setText('now-lede', lede);
+}
+
+// ── connect a client: the address, the model and the key, ready to copy ───────
+// Hasan (2026-10-18): the address to give a client, plain and in sight, for whoever reads nothing else. The proxy
+// listens where its unit says (api, read every 30 s); everywhere, it answers on the address this page was reached by.
+const API = {d: null, model: '', target: null, said: ''};
+on('api', d => { API.d = d; renderApi(); });
+on('engine_info', d => { API.model = (d.info || {}).served_model_name || ''; API.target = d.served_target || null; renderApi(); });
+on('lifecycle', () => renderApi());
+const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
+const apiUrl = (d, host) => `${d.tls ? 'https' : 'http'}://${host.includes(':') ? '[' + host + ']' : host}:${d.port}`;
+function apiBase(d){
+  // a proxy on every interface answers on the address this page was reached by; one bound to an address, on that one.
+  // An IPv6 address comes in brackets from location.hostname: unwrapped, or "[[::1]]" (review of v1.45.1)
+  const any = !d.bind || d.bind === '0.0.0.0' || d.bind === '::';
+  const host = any ? location.hostname.replace(/^\[(.*)\]$/, '$1') : d.bind;
+  return {host, base: apiUrl(d, host)};
+}
+function renderApi(){
+  const d = API.d, box = $('api-facts'), row = $('api-copy');
+  if (!d || !box) return;
+  const {host, base} = apiBase(d);
+  // the proxy's own interface decides who can reach it, not the address this page was opened by: a page opened on
+  // the box (127.0.0.1) said a proxy on every interface listened on the box only (captures of 2026-11-09)
+  const boxOnly = LOOPBACK.includes(d.bind);
+  const others = !boxOnly && LOOPBACK.includes(host) ? (d.addresses || []).map(a => `${apiUrl(d, a.addr)}/v1 (${a.iface})`) : [];
+  // the model of the lane that serves now: engine_info is read every 30 s, the lanes' states every 2, and just after a
+  // switch it still named the lane before, which a copied test then asked for (review of v1.45.1)
+  const s = servingEngine(), fresh = !!s && !!API.target && s[1].target === API.target;
+  const model = textReady() && fresh && API.model ? API.model : '';
+  const modelSaid = model || (!servingEngine() ? 'nothing serves now' : !textReady() ? 'no text lane serves now' : 'reading the lane that serves…');
+  // with client keys, the proxy refuses every other key, the cockpit's login included (keepalive-proxy.py, its wall)
+  const keySaid = d.client_keys ? "a client key of yours, from the proxy's keys file: it refuses any other, the cockpit's login included"
+    : `the cockpit's login, in ${d.key_file} on the box`;
+  // the header through a descriptor, never an argument of curl's, where any local user reads it in /proc (the rule of
+  // tests/test_no_secret_in_argv.py, which caught this command at first)
+  const keyHeader = `@<(printf 'Authorization: Bearer %s\\n' "${d.client_keys ? '$YOUR_CLIENT_KEY' : `$(cat ${d.key_file})`}")`;
+  const rows = [['OpenAI API', `${base}/v1`, 'wrap'], ['Anthropic API', base, 'wrap'], ['Model', modelSaid], ['Key', keySaid, 'wrap'],
+    boxOnly ? ['Other machines', `the proxy listens on this box only (PROXY_BIND=${d.bind}): PROXY_BIND=0.0.0.0 ./install.sh opens it, the key still the gate`, 'wrap']
+      : others.length ? ['From another machine', others.join('\n'), 'wrap lines'] : [null, null],
+    // part of the proxy's settings in a file the cockpit cannot read: what it sets is not known here (review of v1.45.1)
+    d.env_unread ? ['Not read', "the proxy's environment file: if it sets a certificate the address is https, and with client keys only those are taken", 'wrap'] : [null, null]];
+  const m = model || 'MODEL';
+  // claude-local sets Claude Code up for the lane that serves (proxy, key, model, budgets: docs/clients.md); the test
+  // reads the key from its file, on the box, and never shows it
+  const items = [['Copy the address', `${base}/v1`], ['Copy for Claude Code, on the box', 'claude-local'],
+    ['Copy a test', `curl -s ${base}/v1/chat/completions -H ${keyHeader} -H 'Content-Type: application/json' -d '{"model":"${m}","messages":[{"role":"user","content":"Say ok."}],"max_tokens":8}'`]];
+  // the unit not read: the proxy's usual port, said as a guess (review of v1.45.1)
+  const aside = !d.known ? 'its port not read: 30001 assumed' : boxOnly ? 'from this box only' : 'OpenAI and Anthropic APIs';
+  // built again only when what it says changed: rebuilt at every tick of the lanes (2 s), a selection or a focus on
+  // it was lost within two seconds (review of v1.45.1)
+  const said = JSON.stringify([rows, items, aside]);
+  if (said === API.said) return;
+  API.said = said;
+  setText('api-aside', aside);
+  facts(box, rows);
+  clear(row);
+  items.forEach(([label, text]) => { const b = el('button', 'btn sm', label); b.type = 'button'; b.addEventListener('click', () => copyText(text)); row.append(b); });
+  const a = el('a', 'btn sm ghost', 'Every client, step by step'); a.href = 'https://github.com/hasso5703/alzeo/blob/main/docs/clients.md';
+  a.target = '_blank'; a.rel = 'noopener'; row.append(a);
 }
 
 // ── activity: what the seated lane is doing ───────────────────────────────────
@@ -269,7 +320,10 @@ function renderActivity(){
   setText('act-title', 'Requests'); setText('act-v', String(n)); setText('act-k', (n ? 'running' : 'nothing running') + (n || w ? `, ${w} waiting` : ''));
   push('act', n, 180); drawSpark($('act-spark'), 'act', cssVar('--brand'), Math.max(4, F.maxRun || 4), {empty: 'quiet so far'});
   const held = physTokens(l);
-  facts(fx, [['KV pool held', F.pool ? `${fmtN(held)} of ${fmtN(F.pool)} tokens` : 'waiting for the engine'],
+  // a long prompt the cache could not serve, with how far it has got, so a wait is not taken for a hang (issue #61;
+  // said by the Now view's lede before, gone with it on 2026-11-08)
+  facts(fx, [['Computing its prompt', n === 1 && F.prompt ? promptProgress(F.prompt) : null, 'wrap'],
+             ['KV pool held', F.pool ? `${fmtN(held)} of ${fmtN(F.pool)} tokens` : 'waiting for the engine'],
              ['One prompt, at most', singleLimit() ? `about ${fmtK(singleLimit())} tokens` : null],
              ['Generation probe', F.canaryTxt || null], ['Up', e.elapsed ? fmtDur(e.elapsed) : null]]);
 }

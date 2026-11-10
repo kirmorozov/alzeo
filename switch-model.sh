@@ -474,7 +474,7 @@ if [ "$CHOICE" = "nemotron" ] || [ "$CHOICE" = "nemotron-super" ]; then
   exit 0
 fi
 
-# ── The Flash FP4-Local lane: NVIDIA's FP4 build of the flash model, on vLLM ─────────
+# ── The Qwen3.8 Flash-Next FP4-Local lane: NVIDIA's FP4 build of the flash model, on vLLM ─────────
 # A text lane for the proxy, served by vLLM with b12x like the Nemotron lanes, under the same
 # contract: verify the checkpoint (the first switch fetches it), put the unit for it in place, make
 # it the one unit enabled at boot, never start or stop anything, print the exact commands. The unit
@@ -490,7 +490,7 @@ FLASH_LOCAL_UNIT_NAME="qwen38-flash-local.service"
 # as the other lanes' units are.
 FLL_STAGE="$CONFIG_DIR/qwen38-flash-local.service.switch-stage"
 if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
-  [ -f "$FLASH_LOCAL_UNIT" ] || die "the Flash FP4-Local lane is not installed on this box (no $FLASH_LOCAL_UNIT). Install it once: ./install.sh --with-flash-local (about 121 GB)"
+  [ -f "$FLASH_LOCAL_UNIT" ] || die "the Qwen3.8 Flash-Next FP4-Local lane is not installed on this box (no $FLASH_LOCAL_UNIT). Install it once: ./install.sh --with-flash-local (about 121 GB)"
   # The checkpoint, its pinned revision, the image, the size, and the DFlash2 drafter the
   # flash-local-dflash2 target loads with the checkpoint, from the lane's installer, the one place
   # they are declared.
@@ -506,7 +506,7 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
   # in it
   FLL_IMAGE="$FLASH_LOCAL_IMAGE"
   docker image inspect "$FLL_IMAGE" >/dev/null 2>&1 \
-    || die "the Flash FP4-Local lane's image (${FLL_IMAGE:0:40}...) is missing: ./prepare-lane.sh $CHOICE pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+    || die "the Qwen3.8 Flash-Next FP4-Local lane's image (${FLL_IMAGE:0:40}...) is missing: ./prepare-lane.sh $CHOICE pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
   FLL_HF="$(unit_hf_cache "$FLASH_LOCAL_UNIT")"
   FLL_HF="${FLL_HF:-$HF_CACHE}"
   # the room its table's copies need on their disk (install-flash-local.sh; the checkpoint's and,
@@ -530,7 +530,7 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
     -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
     -v "$FLL_HF":/hf "$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV" --offline-first \
     --need-gb "$FLASH_LOCAL_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
-    || die "the Flash FP4-Local checkpoint could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+    || die "the Qwen3.8 Flash-Next FP4-Local checkpoint could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
   if [ "$FLL_VARIANT" = dflash2 ]; then
     # its DFlash2 drafter at its pinned revision, in the cache the unit reads: the target loads it
     # with the checkpoint, and the unit's check of its files guards it there
@@ -542,7 +542,7 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
       -v "$REPO_DIR/ckpt-fetch.py:/opt/qwen38/ckpt-fetch.py:ro" \
       -v "$FLL_HF":/hf "$FLL_IMAGE" /opt/qwen38/ckpt-fetch.py "$FLASH_LOCAL_DRAFT_REPO" "$FLASH_LOCAL_DRAFT_REV" --offline-first \
       --need-gb "$FLASH_LOCAL_DRAFT_GB" --free-gb "$(dl_free_gb "$FLL_HF")" \
-      || die "the Flash FP4-Local lane's DFlash2 drafter could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
+      || die "the Qwen3.8 Flash-Next FP4-Local lane's DFlash2 drafter could not be verified or fetched (re-run to resume; set HF_TOKEN if it stalls)"
   fi
   if [ "$FLL_VARIANT" = dflash2 ]; then
     fetched "$FLASH_LOCAL_REPO @ ${FLASH_LOCAL_REV:0:12}, with its DFlash2 drafter"
@@ -552,7 +552,7 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
   # its chat template, its n-gram table where the engine reads it, its capture plugin when the
   # target is dflash2, and its unit for this checkpoint
   HF_CACHE="$FLL_HF" FLASH_LOCAL_VARIANT="$FLL_VARIANT" bash "$REPO_DIR/install-flash-local.sh" --stage "$FLL_STAGE" \
-    || { rm -f "$FLL_STAGE"; die "the Flash FP4-Local unit could not be prepared (the lines above say why)"; }
+    || { rm -f "$FLL_STAGE"; die "the Qwen3.8 Flash-Next FP4-Local unit could not be prepared (the lines above say why)"; }
   FLL_REWRITTEN=""
   if ! cmp -s "$FLL_STAGE" "$FLASH_LOCAL_UNIT"; then
     diff "$FLL_STAGE" "$FLASH_LOCAL_UNIT" || true   # show exactly what changes
@@ -600,19 +600,29 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
     echo "opencode integration is off on this box (./install.sh --no-opencode): default model left alone"
   else
     FLL_OC_SUM="$({ cat "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json" 2>/dev/null || true; } | sha256sum)"
-    FLL_PAIR="$("$REPO_DIR/oc-limits.sh" "$CHOICE")" || FLL_PAIR=""
-    FLL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label "$CHOICE" 262144 || true)"
+    # the pair, the window and the target of the unit just staged: 1,048,576 tokens with FLASH_LOCAL_CONTEXT=1m
+    # (v1.45.2), and the flash-local-dflash2 target where the unit names its DFlash2 drafter
+    FLL_WINDOW="$({ grep -oE -- '--max-model-len [0-9]+' "$FLASH_LOCAL_UNIT" 2>/dev/null || true; } | awk 'NR == 1 {print $2}')"
+    FLL_TARGET=flash-local
+    ! grep -q -- '--speculative-config.method dflash' "$FLASH_LOCAL_UNIT" 2>/dev/null || FLL_TARGET=flash-local-dflash2
+    FLL_PAIR="$("$REPO_DIR/oc-limits.sh" "$FLL_TARGET" --from "$FLASH_LOCAL_UNIT")" || FLL_PAIR=""
+    read -r FLL_CTX FLL_OUT _ <<< "$FLL_PAIR"
+    FLL_NAME="$(python3 "$REPO_DIR/oc-point-default.py" --label "$FLL_TARGET" "${FLL_WINDOW:-262144}" || true)"
     FLL_PORT="$({ grep -m1 -oE 'PROXY_PORT=[0-9]+|keepalive-proxy.py [0-9]+' /etc/systemd/system/qwen38-keepalive.service 2>/dev/null || true; } | grep -oE '[0-9]+$' || true)"
     FLL_SRC="$(mktemp)"
     if [ -n "$FLL_PAIR" ] && python3 "$REPO_DIR/oc-flash-local.py" "http://127.0.0.1:${FLL_PORT:-30001}/v1" "$CONFIG_DIR/api-key" \
-         "${FLL_PAIR%% *}" "$(echo "$FLL_PAIR" | cut -d' ' -f2)" "${FLL_NAME:-Qwen3.8-Flash-Next FP4-Local (local, 262K)}" > "$FLL_SRC"; then
+         "$FLL_CTX" "$FLL_OUT" "${FLL_NAME:-Qwen3.8-Flash-Next FP4-Local (local, 262K)}" > "$FLL_SRC"; then
       # The compaction block is global: sized from this lane's window as every text switch sizes
       # it from its own. pi's keepRecentTokens follows (pi-gen).
-      FLL_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "${FLL_PAIR%% *}")" || FLL_KEEP=""
+      FLL_KEEP="$("$REPO_DIR/oc-limits.sh" --preserve "$FLL_CTX")" || FLL_KEEP=""
       for OC_JSON in "$CONFIG_DIR/opencode.json" "$HOME/.config/opencode/opencode.json"; do
         [ -f "$OC_JSON" ] || continue
         python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --add-providers "$FLL_SRC" >/dev/null || true
-        python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-local "$CHOICE" 262144 \
+        # and an entry already there takes the pair of the unit's window: --add-providers adds a missing provider only,
+        # and a Load to 1M kept 205,000 under a compaction block sized for 840,000 (second review of v1.45.2)
+        python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" flash-local qwen3.8-flash-next-fp4 "$FLL_CTX" "$FLL_OUT" >/dev/null \
+          || echo "NOTE: could not update the Qwen3.8 Flash-Next FP4-Local limits in $OC_JSON; check them by hand ($FLL_PAIR)"
+        python3 "$REPO_DIR/oc-point-default.py" "$OC_JSON" flash-local "$FLL_TARGET" "${FLL_WINDOW:-262144}" \
           || echo "NOTE: could not update $OC_JSON (hand-edited?); set its \"model\" field yourself"
         [ -n "$FLL_KEEP" ] && { python3 "$REPO_DIR/oc-merge-limits.py" "$OC_JSON" --compaction "$FLL_KEEP" \
           || echo "NOTE: could not update the compaction block in $OC_JSON; check it by hand ($FLL_KEEP)"; }
@@ -640,7 +650,7 @@ if [ "$CHOICE" = "flash-local" ] || [ "$CHOICE" = "flash-local-dflash2" ]; then
 fi
 
 # ── The Ornith 1.5 122B lane: Ornith AI's mixture of experts, on vLLM ─────────────────────
-# A text lane for the proxy, served by vLLM with b12x in the Flash FP4-Local lane's image, under the
+# A text lane for the proxy, served by vLLM with b12x in the Qwen3.8 Flash-Next FP4-Local lane's image, under the
 # same contract: verify the checkpoint (the first switch fetches it), put the unit for it in place,
 # make it the one unit enabled at boot, never start or stop anything, print the exact commands. The
 # unit is rendered by the lane's installer (install-ornith-122b.sh --stage, no sudo): one renderer,
@@ -653,7 +663,7 @@ ORN_STAGE="$CONFIG_DIR/qwen38-ornith-122b.service.switch-stage"
 if [ "$CHOICE" = "ornith-122b" ]; then
   [ -f "$ORNITH_122B_UNIT" ] || die "the Ornith 1.5 122B lane is not installed on this box (no $ORNITH_122B_UNIT). Install it once: ./install.sh --with-ornith-122b (about 96 GB)"
   # The checkpoint, its pinned revision and the size, from the lane's installer, and the image from
-  # the Flash FP4-Local lane's, the one place each is declared.
+  # the Qwen3.8 Flash-Next FP4-Local lane's, the one place each is declared.
   eval "$(grep -E '^ORNITH_122B_(REPO|REV|GB)=' "$REPO_DIR/install-ornith-122b.sh" || true)"
   eval "$(grep -E '^FLASH_LOCAL_IMAGE=' "$REPO_DIR/install-flash-local.sh" || true)"
   for _v in ORNITH_122B_REPO ORNITH_122B_REV ORNITH_122B_GB FLASH_LOCAL_IMAGE; do
@@ -661,7 +671,7 @@ if [ "$CHOICE" = "ornith-122b" ]; then
   done
   unset _v
   docker image inspect "$FLASH_LOCAL_IMAGE" >/dev/null 2>&1 \
-    || die "the Ornith 1.5 122B lane's image (${FLASH_LOCAL_IMAGE:0:40}..., the Flash FP4-Local lane's) is missing: ./prepare-lane.sh ornith-122b pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
+    || die "the Ornith 1.5 122B lane's image (${FLASH_LOCAL_IMAGE:0:40}..., the Qwen3.8 Flash-Next FP4-Local lane's) is missing: ./prepare-lane.sh ornith-122b pulls it (no sudo; its first Load from the cockpit runs it), then switch again"
   ORN_HF="$(unit_hf_cache "$ORNITH_122B_UNIT")"
   ORN_HF="${ORN_HF:-$HF_CACHE}"
   printf '\n\033[1;36m── Verifying %s @ %s in the cache (resumable)\033[0m\n' "$ORNITH_122B_REPO" "${ORNITH_122B_REV:0:12}"
@@ -1366,7 +1376,7 @@ if [ -f "$NEMOTRON_SUPER_UNIT" ] && systemctl is-enabled --quiet "$NEMOTRON_SUPE
   echo "disabling $NEMOTRON_SUPER_UNIT_NAME at boot (unit file kept for switching back)"
   sudo systemctl disable "$NEMOTRON_SUPER_UNIT_NAME"
 fi
-# The Flash FP4-Local lane is the eighth: the same reason.
+# The Qwen3.8 Flash-Next FP4-Local lane is the eighth: the same reason.
 if [ -f "$FLASH_LOCAL_UNIT" ] && systemctl is-enabled --quiet "$FLASH_LOCAL_UNIT_NAME" 2>/dev/null; then
   echo "disabling $FLASH_LOCAL_UNIT_NAME at boot (unit file kept for switching back)"
   sudo systemctl disable "$FLASH_LOCAL_UNIT_NAME"

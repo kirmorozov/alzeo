@@ -31,7 +31,7 @@ on('decode', d => {
     return;
   }
   if (!d.lane && isB12x((servingEngine() || [])[0])){
-    // the same vLLM counters as Kolibri's, and a drafter (the Flash FP4-Local lane's MTP head
+    // the same vLLM counters as Kolibri's, and a drafter (the Qwen3.8 Flash-Next FP4-Local lane's MTP head
     // counts as one): its mean acceptance over the last seconds, as vLLM counts it
     // (nemotron_load), idle when no draft came in them
     const l = F.load || {};
@@ -157,7 +157,7 @@ on('reqguard', d => {
   setText('zg-override', d.override === true ? 'yes' : d.override === false ? 'no' : d.lane ? 'unknown (docker did not answer)'
     : (servingEngine() || [])[0] === KOLIBRI_UNIT ? 'not on the Kolibri lane (an SGLang setting)'
     : isNemotron((servingEngine() || [])[0]) ? 'not on the Nemotron lanes (an SGLang setting)'
-    : (servingEngine() || [])[0] === FLASH_LOCAL_UNIT ? 'not on the Flash FP4-Local lane (an SGLang setting)'
+    : (servingEngine() || [])[0] === FLASH_LOCAL_UNIT ? 'not on the Qwen3.8 Flash-Next FP4-Local lane (an SGLang setting)'
     : (servingEngine() || [])[0] === ORNITH_UNIT ? 'not on the Ornith lane (an SGLang setting)' : 'no engine');
   const acted = [];
   if (g.aborted) acted.push(`${g.aborted} aborted`);
@@ -206,7 +206,7 @@ on('machine', d => {
 // On the Kolibri lane the pool guard cannot act: vLLM has no route that flushes its cache, and it
 // read "armed" there (review, 2026-10-14).
 const kolibriHolds = () => (servingEngine() || [])[0] === KOLIBRI_UNIT;
-// the Nemotron lanes, the Flash FP4-Local lane and Ornith run on vLLM too
+// the Nemotron lanes, the Qwen3.8 Flash-Next FP4-Local lane and Ornith run on vLLM too
 const nemotronHolds = () => isB12x((servingEngine() || [])[0]);
 // The floor stops generations through the proxy since v1.40.3, on every lane: vLLM has no route that
 // aborts a generation, and the proxy closes its connection, which vLLM stops (it said "cannot act" there).
@@ -260,7 +260,13 @@ function recipeRow(tb, row){
   if (r){ c0.append(tag(r.lane === 'flash' ? 'flash' : '27B', 'gold'), ' ', el('strong', null, r.id)); if (row.installed) c0.append(' ', tag('installed', 'cool')); if (!r.builtin) c0.append(' ', tag(row.file || 'custom')); }
   else c0.append(tag(row.file || '?', 'err'));
   if (row.errors && row.errors.length){ const td = tr.insertCell(); td.colSpan = 6; td.append(tag('invalid', 'err'), ' ', row.errors.join('; ')); return; }
-  const c1 = tr.insertCell(); c1.className = 'num'; c1.textContent = r.engine.image.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+/, '@$1…'); c1.title = r.engine.image;
+  // the engine and its version when the recipe runs the image its lane pins (decision 1178); an image of the
+  // operator's is named by itself, as before
+  const img = r.engine.image.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+/, '@$1…');
+  const pinned = (F.engineTable || {})[r.lane === 'flash' ? UFLASH : U27];
+  const c1 = tr.insertCell(); c1.title = r.engine.image;
+  if (pinned && pinned.pin === r.engine.image) c1.append(pinned.label, ' ', el('span', 'faint num', img));
+  else { c1.className = 'num'; c1.textContent = img; }
   const c2 = tr.insertCell(); c2.textContent = r.model.repo.split('/').pop() + ' '; c2.append(el('span', 'faint num', r.model.revision.slice(0, 10)));
   const dr = r.drafter || {};
   tr.insertCell().textContent = dr.algorithm === 'none' || !dr.algorithm ? 'none' : dr.algorithm + (dr.repo ? ' ' + dr.repo.split('/').pop() : ' (own head)') + (dr.draft_tokens ? ', ' + dr.draft_tokens + ' tokens' : '');

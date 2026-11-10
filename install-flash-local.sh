@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Flash FP4-Local lane: NVIDIA's own build of Qwen3.8-Flash-Next for a local GPU
+# Install the Qwen3.8 Flash-Next FP4-Local lane: NVIDIA's own build of Qwen3.8-Flash-Next for a local GPU
 # (nvidia/Qwen3.8-Flash-Next-FP4-Local: its experts in NVFP4 and its other layers in MXFP8, by
 # NVIDIA's quantization-aware distillation, its n-gram embedding table in NVFP4 too), served by
 # the community b12x vLLM image its model card names for a DGX Spark, on the text lanes' port
@@ -96,14 +96,14 @@ CONFIG_DIR="$HOME/.config/qwen38"
 . "$HERE/lanes.sh"
 # A 64 GB DGX Spark cannot hold this lane (boxmem.py): refused there before anything is fetched,
 # and --uninstall still takes away what an older release put there (found in review, 2026-10-23).
-[ "$ACTION" = uninstall ] || [ "$(box_mem_class)" != 64 ] || lane_fits flash-local || die "The Flash FP4-Local lane needs a 128 GB DGX Spark, and this box is a 64 GB one."
+[ "$ACTION" = uninstall ] || [ "$(box_mem_class)" != 64 ] || lane_fits flash-local || die "The Qwen3.8 Flash-Next FP4-Local lane needs a 128 GB DGX Spark, and this box is a 64 GB one."
 # A terminal opened before the account joined the docker group: the run goes on with it (lanes.sh).
 docker_session bash "$HERE/${BASH_SOURCE[0]##*/}" "$@"
 # what the vLLM lanes' installers share: the engine's cache and port, the uninstall, the service,
 # the preflight and the room, the fetch, the proof
 # shellcheck source=vllm-lane.sh
 . "$HERE/vllm-lane.sh"
-VLANE=flash-local; VLANE_SHORT="Flash FP4-Local"
+VLANE=flash-local; VLANE_SHORT="Qwen3.8 Flash-Next FP4-Local"
 
 # The pins, at column 0 like install.sh's: the checkpoint at its revision of 2026-10-15 19:45 UTC,
 # the last one (checked on 2026-10-20: every revision since the weights came, on 2026-10-08, changes
@@ -167,7 +167,7 @@ IMAGE_GB=28
 vlane_engine_env "${FLASH_LOCAL_PORT:-}"
 
 if [ "$ACTION" = uninstall ]; then
-  step "Removing the Flash FP4-Local lane"
+  step "Removing the Qwen3.8 Flash-Next FP4-Local lane"
   # The folders the copies of the n-gram table can be in, read before the unit goes: the one the unit
   # mounts them from, the one chosen (FLASH_LOCAL_PLE_DIR, kept) and the default one. In each, the
   # copies ple-table.py lists as its own go, and nothing else (Hasan's choice, 2026-10-20: they go with
@@ -187,7 +187,8 @@ if [ "$ACTION" = uninstall ]; then
   # folder is there, whatever target the box served last
   vlane_uninstall_runtime qwen38-flash-local "$FLASH_LOCAL_IMAGE" "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_DRAFT_REPO"
   pin_untag flash-local
-  rm -f "$CONFIG_DIR/chat-template-flash-local.jinja" "$CONFIG_DIR/flash-local-ple-dir" "$CONFIG_DIR/flash-local-files.sh"
+  rm -f "$CONFIG_DIR/chat-template-flash-local.jinja" "$CONFIG_DIR/flash-local-ple-dir" "$CONFIG_DIR/flash-local-files.sh" \
+        "$CONFIG_DIR/flash-local-context" "$CONFIG_DIR/flash-local-yarn.json"
   # The dflash2 drafter's own half of the lane, beside the mtp caches the shared step took: its
   # caches, written as root inside the container like the mtp target's (what the user cannot
   # remove, sudo does, as vllm-lane.sh removes those), and the capture plugin's copy, the user's
@@ -248,6 +249,65 @@ elif [ -s "$PLE_CHOICE" ]; then
   FLASH_LOCAL_PLE_DIR="$(head -1 "$PLE_CHOICE")"
 fi
 TABLE_DIR_ARG=(--dir "${FLASH_LOCAL_PLE_DIR:-}")
+# FLASH_LOCAL_CONTEXT=1m: a window of 1,048,576 tokens by YaRN, a factor of 4 over the native 262,144 with the model's
+# multimodal RoPE kept, as measured on the reference box (2026-11-09, discussion #63): ready in 406 s, a KV pool of
+# 1,061,819 tokens at the lane's share, a passphrase retrieved 8 times of 8 up to 1,036,576 tokens (608 s to the first
+# token there), at least 15.1 GiB of memory left. Kept for the runs after in a file of its own, as the PLE folder is:
+# a Load from the cockpit stages the unit with none of the user's environment. native (or empty) brings 262,144 back.
+# The choice is read here and kept by the render that takes it (render_unit): a refused one is not kept.
+CONTEXT_CHOICE="$CONFIG_DIR/flash-local-context"; YARN_JSON="$CONFIG_DIR/flash-local-yarn.json"; CONTEXT_GIVEN=""
+if [ -n "${FLASH_LOCAL_CONTEXT+set}" ]; then
+  case "$FLASH_LOCAL_CONTEXT" in
+    1m) ;;
+    ""|native) FLASH_LOCAL_CONTEXT=native ;;
+    *) die "FLASH_LOCAL_CONTEXT=$FLASH_LOCAL_CONTEXT: native (262,144 tokens, the default) or 1m (1,048,576 by YaRN)" ;;
+  esac
+  CONTEXT_GIVEN=1
+elif [ "$(head -1 "$CONTEXT_CHOICE" 2>/dev/null)" = 1m ]; then
+  FLASH_LOCAL_CONTEXT=1m
+else
+  FLASH_LOCAL_CONTEXT=native
+fi
+# The choice given, kept for the runs after (a Load stages the unit with none of the user's environment): by the render
+# that takes it, and by --prepare, which renders nothing. A refused one is not kept (render_unit).
+keep_choice(){
+  [ -n "$CONTEXT_GIVEN" ] || return 0
+  if [ "$FLASH_LOCAL_CONTEXT" = 1m ]; then mkdir -p "$CONFIG_DIR" && echo 1m > "$CONTEXT_CHOICE"; else rm -f "$CONTEXT_CHOICE"; fi
+}
+# The overrides the 1M window takes, from the pinned checkpoint's own RoPE, written to YARN_JSON only when they change
+# (its date tells a lane that serves whether it runs them, vlane_put_unit). 0: written, 2: no checkpoint in the cache yet,
+# which a Load fetches, 3: refused, the checkpoint's RoPE is not the one measured, 1: anything else (a stage with no
+# checkpoint, a file that cannot be read or written), which the line above it says.
+flash_local_yarn(){
+  local cfg="$HF_CACHE/hub/models--${MODEL//\//--}/snapshots/$MODEL_REV/config.json"
+  if [ ! -f "$cfg" ]; then
+    [ "$MODE" != stage ] || { echo "FLASH_LOCAL_CONTEXT=1m: no config.json in $(dirname "$cfg")" >&2; return 1; }
+    return 2
+  fi
+  local rc=0
+  python3 - "$cfg" "$YARN_JSON" <<'PY' || rc=$?
+import json, sys
+c = json.load(open(sys.argv[1])); t = c.get("text_config", c); r = dict(t.get("rope_parameters") or {})
+want = {"rope_type": "default", "mrope_interleaved": True, "mrope_section": [11, 11, 10],
+        "partial_rotary_factor": 0.25, "rope_theta": 10000000}
+if t.get("max_position_embeddings") != 262144 or any(r.get(k) != v for k, v in want.items()):
+    print("FLASH_LOCAL_CONTEXT=1m: the pinned checkpoint's RoPE is not the one the 1M window was measured on",
+          file=sys.stderr)
+    sys.exit(3)
+r.update(rope_type="yarn", factor=4.0, original_max_position_embeddings=262144)
+text = json.dumps({"text_config": {"rope_parameters": r, "max_position_embeddings": 1048576}}, separators=(",", ":"))
+try:
+    same = open(sys.argv[2]).read() == text
+except OSError:
+    same = False
+if not same:
+    with open(sys.argv[2] + ".new", "w") as f:
+        f.write(text)
+    import os
+    os.replace(sys.argv[2] + ".new", sys.argv[2])
+PY
+  case "$rc" in 0|3) return "$rc" ;; *) return 1 ;; esac
+}
 TABLE_MOUNTS=""
 lane_table(){  # $1 copy: make the copies whole first; mounts: only name the copies already there
   local rc=0
@@ -373,19 +433,42 @@ lane_plugin(){
 # dflash2 drafter, the drafter's snapshot and every file of the plugin's copy. The table's
 # line of the check carries the extras (DRAFT_FILES), so that the mtp unit keeps its own, byte
 # for byte: no space there is ever dropped or doubled.
+refuse_window(){
+  die "the 1M window's overrides could not be written (the line above says why). Nothing was changed: the lane keeps" \
+      "its window, and FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --units-only sets the native one"
+}
 render_unit(){
+  local maxlen=262144 yarn="" rc=0
+  if [ "$FLASH_LOCAL_CONTEXT" = 1m ]; then
+    flash_local_yarn || rc=$?
+    case "$rc" in
+      0) maxlen=1048576
+         # read by the unit's start from its file: the JSON on the unit's own line would go through systemd's quoting
+         yarn="--hf-overrides \"\$\$(cat $YARN_JSON)\"" ;;
+      2) echo "NOTE: FLASH_LOCAL_CONTEXT=1m: the checkpoint is not in the cache yet, so the unit keeps the native window" \
+              "until the lane's Load, which fetches it and sets the 1M window" ;;
+      3) # the checkpoint refuses it. Asked now: refused, and nothing kept. Kept from before (a Load, an update): the
+         # lane serves its native window and says why, and no Load fails for it (second review of v1.45.2)
+         [ -z "$CONTEXT_GIVEN" ] || refuse_window
+         echo "NOTE: the 1M window chosen (FLASH_LOCAL_CONTEXT=1m) is off for this checkpoint: the unit serves the native" \
+              "262,144 tokens. FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --units-only drops the choice" ;;
+      *) refuse_window ;;    # a fault, not the checkpoint's word: said as it is (third review of v1.45.2)
+    esac
+  fi
   local index="$HF_CACHE/hub/models--${MODEL//\//--}/snapshots/$MODEL_REV/model.safetensors.index.json" sources
   sources="$( { grep -oE -- '-v [^ :]+:' <<< "$TABLE_MOUNTS" || true; } | sed -e 's/^-v //' -e 's/:$//' | tr '\n' ' ')"
   sed -e "s|__CHECKPOINT_INDEX__|$index|g" -e "s|__TABLE_SOURCES__|${sources% }$DRAFT_FILES|g" \
       -e "s|__USER__|$(id -un)|g" -e "s|__GROUP__|$(id -gn "$(id -un)")|g" -e "s|__HOME__|$HOME|g" \
       -e "s|__IMAGE__|$LOCAL_IMAGE|g" -e "s|__MODEL__|$MODEL|g" -e "s|__REV__|$MODEL_REV|g" \
       -e "s|__GMU__|$GMU|g" -e "s|__SEQS__|$SEQS|g" -e "s|__HF_CACHE__|$HF_CACHE|g" \
+      -e "s|__MAXLEN__|$maxlen|g" -e "s|__YARN__|$yarn|g" \
       -e "s|__ENGINE_BIND__|$ENGINE_BIND|g" -e "s|__PORT__|$PORT|g" \
       -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e "s|__SPEC_CONFIG__|$SPEC_CONFIG|g" \
       -e "s|__LM_HEAD_LINE__|$LM_HEAD_LINE|g" -e "s|__CACHE_DIR__|$CACHE_DIR|g" \
       -e "s|__PYTHONPATH__|$PYTHONPATH_LINE|g" -e "s|__PLUGIN_MOUNT__|$PLUGIN_MOUNT|g" \
       -e '/^ *\\$/d' \
       "$HERE/$UNIT.template" > "$1"
+  keep_choice
 }
 
 # Step 4, the one part that needs root: the unit and its start scripts. A function, since a lane
@@ -407,16 +490,18 @@ install_service(){
   RENDER="$(mktemp)"; trap 'rm -f "$RENDER"' EXIT
   render_unit "$RENDER"
   # with what the engine reads at its start besides the unit: a lane started before they changed
-  # serves the old ones (vllm-lane.sh); the dflash2 unit's capture plugin, every file of its
-  # copy, named like its key middleware is, so that a change of it says a restart is owed too
-  EXTRA_UNIT_FILES=("$CONFIG_DIR/seccomp-io-uring.json" "$TEMPLATE")
+  # serves the old ones (vllm-lane.sh); the 1M window's overrides among them when its unit reads
+  # them, and the dflash2 unit's capture plugin, every file of its copy, named like its key
+  # middleware is, so that a change of it says a restart is owed too
+  local starts=("$CONFIG_DIR/seccomp-io-uring.json" "$TEMPLATE")
+  ! grep -q -- '--hf-overrides' "$RENDER" || starts+=("$YARN_JSON")
   if [ "$VARIANT" = dflash2 ]; then
-    for f in $(plugin_files); do EXTRA_UNIT_FILES+=("$CONFIG_DIR/flash-local-dflash2/$f"); done
+    for f in $(plugin_files); do starts+=("$CONFIG_DIR/flash-local-dflash2/$f"); done
   fi
-  vlane_put_unit "$RENDER" "${EXTRA_UNIT_FILES[@]}"
+  vlane_put_unit "$RENDER" "${starts[@]}"
   # Installed, not switched to: the lane this box serves stays the lane it serves.
   echo "installed as a lane of its own. Switch to it like any lane:"
-  echo "  the cockpit: Load on Flash FP4-Local (NVIDIA) in the Lanes view"
+  echo "  the cockpit: Load on Qwen3.8 Flash-Next FP4-Local in the Lanes view"
   echo "  a terminal : ./switch-model.sh flash-local, then the commands it prints"
 }
 
@@ -467,8 +552,8 @@ if [ "$MODE" = units ]; then
   lane_table mounts
   vlane_template_if_cached "$TEMPLATE" "${TEMPLATE_FIXES[@]}"
   install_service
-  step "Done: the Flash FP4-Local lane is installed; its first Load prepares it"
-  echo "  the cockpit: Load on Flash FP4-Local (NVIDIA) in the Lanes view pulls its image (about 18 GB, 10 to"
+  step "Done: the Qwen3.8 Flash-Next FP4-Local lane is installed; its first Load prepares it"
+  echo "  the cockpit: Load on Qwen3.8 Flash-Next FP4-Local in the Lanes view pulls its image (about 18 GB, 10 to"
   echo "               download), fetches its checkpoint (about $WEIGHTS_GB GB), then starts it"
   echo "  a terminal : ./install-flash-local.sh --prepare, then ./switch-model.sh flash-local and the commands it prints"
   exit 0
@@ -488,11 +573,18 @@ pin_tag flash-local "$LOCAL_IMAGE"
 unpin_stale flash-local "$LOCAL_IMAGE" || true
 
 if [ "$MODE" = prepare ]; then
+  # its Load renders the unit, with the window chosen here (FLASH_LOCAL_CONTEXT): checked first against a checkpoint
+  # already in the cache, as a render checks it (third review of v1.45.2)
+  if [ -n "$CONTEXT_GIVEN" ] && [ "$FLASH_LOCAL_CONTEXT" = 1m ]; then
+    rc=0; flash_local_yarn || rc=$?
+    [ "$rc" = 0 ] || [ "$rc" = 2 ] || refuse_window
+  fi
+  keep_choice
   PREPARE_DONE="its Load fetches the checkpoint and starts it"
   if [ "$VARIANT" = dflash2 ]; then
     PREPARE_DONE="its Load fetches the checkpoint and its DFlash2 drafter and starts it"
   fi
-  step "Done: the Flash FP4-Local lane's image is ready; $PREPARE_DONE"
+  step "Done: the Qwen3.8 Flash-Next FP4-Local lane's image is ready; $PREPARE_DONE"
   exit 0
 fi
 
@@ -520,6 +612,6 @@ VLANE_SERVED=qwen3.8-flash-next-fp4; VLANE_KWARGS='{"enable_thinking":false}'
 VLANE_PARSERS="the qwen3_xml parser is"; VLANE_BOOT="about 6 min, 17 at its first boot"; VLANE_WAIT_MIN=40
 vlane_prove
 
-step "Done: the Flash FP4-Local lane is installed and proved it serves on $ENGINE_BIND:$PORT"
-echo "  switch to it : Load on Flash FP4-Local (NVIDIA) in the cockpit, or ./switch-model.sh flash-local"
+step "Done: the Qwen3.8 Flash-Next FP4-Local lane is installed and proved it serves on $ENGINE_BIND:$PORT"
+echo "  switch to it : Load on Qwen3.8 Flash-Next FP4-Local in the cockpit, or ./switch-model.sh flash-local"
 echo "  clients      : the proxy on :30001 with the box's key, model qwen3.8-flash-next-fp4 (OpenAI and Anthropic APIs)"

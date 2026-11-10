@@ -83,9 +83,9 @@
 
     <!-- ══ NOW ══════════════════════════════════════════════════════════════ -->
     <section class="view" id="view-now" aria-labelledby="h-now">
-      <div class="vhead">
-        <div><h1 id="h-now">Now</h1><p id="now-lede">Reading the box…</p></div>
-      </div>
+      <!-- no title on screen: the rail says Now, and the capsule above says what serves, its state and its load. "Now"
+           in 40 px and a sentence saying the capsule again took 100 px above the pool (Hasan, 2026-11-08) -->
+      <h1 id="h-now" class="sr">Now</h1>
       <section class="pool" id="pool" aria-labelledby="h-pool" data-src="machine,gpu">
         <div class="pool-top">
           <div class="pool-title">
@@ -119,6 +119,12 @@
           <ol class="timeline" id="now-timeline" role="log" aria-label="Recent events"></ol>
         </section>
       </div>
+      <!-- where a client sends its requests: the address, the model, the key, ready to copy (Hasan, 2026-10-18) -->
+      <section class="panel" data-src="api,engine_info,lifecycle" id="now-api" style="margin-top:var(--s-5)">
+        <header><h2>Connect a client</h2><span class="aside" id="api-aside"></span></header>
+        <dl class="facts" id="api-facts"></dl>
+        <div class="btn-row" id="api-copy" style="margin-top:var(--s-4)"></div>
+      </section>
       <div class="vitals" id="vitals" style="margin-top:var(--s-5)">
         <div class="vital" id="vt-cpu"><span class="k">CPU</span><span class="v">…</span><span class="s"></span></div>
         <div class="vital" id="vt-gpu"><span class="k">GPU power</span><span class="v">…</span><span class="s"></span></div>
@@ -137,7 +143,7 @@
     <!-- ══ LANES ════════════════════════════════════════════════════════════ -->
     <section class="view" id="view-lanes" aria-labelledby="h-lanes">
       <div class="vhead">
-        <div><h1 id="h-lanes">Lanes</h1><p>The lanes share one pool, so one serves at a time. Loading a lane hands it the whole box: the one serving stops first, and nothing restarts by itself.</p></div>
+        <div class="vhead-title"><h1 id="h-lanes">Lanes</h1><p>The lanes share one pool, so one serves at a time. Loading a lane hands it the whole box: the one serving stops first, and nothing restarts by itself.</p></div>
       </div>
       <div class="stack" id="lanes-list"></div>
       <div class="grid g2" style="margin-top:var(--s-5)">
@@ -176,7 +182,7 @@
     <!-- ══ TRAFFIC ══════════════════════════════════════════════════════════ -->
     <section class="view" id="view-traffic" aria-labelledby="h-traffic">
       <div class="vhead">
-        <div><h1 id="h-traffic">Traffic</h1><p>What goes through the proxy on :30001, and what the text engine is doing with it.</p></div>
+        <div class="vhead-title"><h1 id="h-traffic">Traffic</h1><p>What goes through the proxy on :30001, and what the text engine is doing with it.</p></div>
         <div class="side"><span class="cap" id="tr-cap">…</span></div>
       </div>
       <section class="panel" data-src="engine_fast,decode">
@@ -226,9 +232,9 @@
     <!-- ══ MACHINE ══════════════════════════════════════════════════════════ -->
     <section class="view" id="view-machine" aria-labelledby="h-machine">
       <div class="vhead">
-        <div><h1 id="h-machine">Machine</h1><p>The GB10 underneath: memory, CPU, GPU, disks, and what the driver refused.</p></div>
+        <div class="vhead-title"><h1 id="h-machine">Machine</h1><p>The GB10 underneath: memory, CPU, GPU, disks, and what the driver refused.</p></div>
       </div>
-      <div class="grid g2">
+      <div class="grid g2 wide4">
         <section class="panel" data-src="machine,engine_fast">
           <header><h2>Memory</h2><span class="cap" id="mm-cap">…</span></header>
           <canvas class="spark tall" id="mm-spark" aria-hidden="true"></canvas>
@@ -298,7 +304,7 @@
     <!-- ══ DECIDE (System One) ══════════════════════════════════════════════ -->
     <section class="view" id="view-decide" aria-labelledby="h-decide">
       <div class="vhead">
-        <div><h1 id="h-decide">Decide</h1><p>Typed judgments from the text lane: yes or no, one of several options, or a score, each with its whole distribution.</p></div>
+        <div class="vhead-title"><h1 id="h-decide">Decide</h1><p>Typed judgments from the text lane: yes or no, one of several options, or a score, each with its whole distribution.</p></div>
         <div class="side"><span class="cap" id="s1-cap">…</span></div>
       </div>
       <p class="banner info" id="s1-note" hidden></p>
@@ -336,7 +342,7 @@
     <!-- ══ IMAGE ════════════════════════════════════════════════════════════ -->
     <section class="view" id="view-image" aria-labelledby="h-image">
       <div class="vhead">
-        <div><h1 id="h-image">Image</h1><p>Qwen-Image 2.1 on this box: create, edit with up to ten references, and cut out with a real alpha channel.</p></div>
+        <div class="vhead-title"><h1 id="h-image">Image</h1><p>Qwen-Image 2.1 on this box: create, edit with up to ten references, and cut out with a real alpha channel.</p></div>
         <div class="side"><span class="cap" id="img-cap">…</span></div>
       </div>
       <div id="img-lane"></div>
@@ -417,7 +423,7 @@
     <!-- ══ VIDEO ════════════════════════════════════════════════════════════ -->
     <section class="view" id="view-video" aria-labelledby="h-video">
       <div class="vhead">
-        <div><h1 id="h-video">Video</h1><p>MiniMax-H3 on this box: video and sound made together in one pass, from a prompt or from keyframes. No pixel leaves the machine.</p></div>
+        <div class="vhead-title"><h1 id="h-video">Video</h1><p>MiniMax-H3 on this box: video and sound made together in one pass, from a prompt or from keyframes. No pixel leaves the machine.</p></div>
         <div class="side"><span class="cap" id="vid-cap">…</span></div>
       </div>
       <div id="vid-lane"></div>
@@ -507,14 +513,14 @@
     <!-- ══ LIBRARY ══════════════════════════════════════════════════════════ -->
     <section class="view" id="view-library" aria-labelledby="h-library">
       <div class="vhead">
-        <div><h1 id="h-library">Library</h1><p>What the lanes can load, what sits on the disk, and whether the pins still match upstream.</p></div>
+        <div class="vhead-title"><h1 id="h-library">Library</h1><p>What the lanes can load, what sits on the disk, and whether the pins still match upstream.</p></div>
       </div>
       <div class="stack">
         <section class="panel">
           <header><h2>Recipes</h2><div class="btn-row"><span class="aside" id="rcp-age"></span><button class="btn sm" id="rcp-btn" type="button">Load</button></div></header>
           <p class="muted" id="rcp-line">A recipe is a lane's full serving setup: engine image, checkpoint, drafter, flags.</p>
           <div class="scroll-x" style="margin-top:var(--s-3)"><table class="tbl dense stack" id="rcp-table">
-            <thead><tr><th>Recipe</th><th>Engine image</th><th>Checkpoint</th><th>Drafter</th><th>Serving</th><th>On disk</th><th>Against the lane</th></tr></thead><tbody><tr class="empty"><td colspan="7">Reading the recipes…</td></tr></tbody></table></div>
+            <thead><tr><th>Recipe</th><th>Engine</th><th>Checkpoint</th><th>Drafter</th><th>Serving</th><th>On disk</th><th>Against the lane</th></tr></thead><tbody><tr class="empty"><td colspan="7">Reading the recipes…</td></tr></tbody></table></div>
           <p class="help" id="rcp-dir"></p>
         </section>
         <div class="grid g2 g2-wide">
@@ -547,14 +553,14 @@
     <!-- ══ LOGS ═════════════════════════════════════════════════════════════ -->
     <section class="view" id="view-logs" aria-labelledby="h-logs">
       <div class="vhead">
-        <div><h1 id="h-logs">Logs</h1><p>The engines' own words, the jobs this cockpit ran, and the events it saw.</p></div>
+        <div class="vhead-title"><h1 id="h-logs">Logs</h1><p>The engines' own words, the jobs this cockpit ran, and the events it saw.</p></div>
       </div>
       <section class="panel">
         <div class="toolbar">
           <label class="sr" for="log-src">Source</label>
           <select class="input" id="log-src">
-            <optgroup label="Serving containers"><option value="qwen38-flash">flash 176B container</option><option value="qwen38-sglang">27B container</option><option value="qwen38-kolibri">Kolibri-1 container</option><option value="qwen38-nemotron">Nemotron Bolt container</option><option value="qwen38-nemotron-super">Nemotron Super VL container</option><option value="qwen38-flash-local">Flash FP4-Local container</option><option value="qwen38-ornith-122b">Ornith 1.5 122B container</option></optgroup>
-            <optgroup label="Unit journals"><option value="qwen38-flash.service">flash 176B journal</option><option value="qwen38-sglang.service">27B journal</option><option value="qwen38-image.service">Qwen-Image journal</option><option value="qwen38-video.service">MiniMax-H3 journal</option><option value="qwen38-kolibri.service">Kolibri-1 journal</option><option value="qwen38-nemotron.service">Nemotron Bolt journal</option><option value="qwen38-nemotron-super.service">Nemotron Super VL journal</option><option value="qwen38-flash-local.service">Flash FP4-Local journal</option><option value="qwen38-ornith-122b.service">Ornith 1.5 122B journal</option><option value="qwen38-keepalive.service">proxy journal</option><option value="opencode-web.service" id="log-opt-agent">agent server journal</option></optgroup>
+            <optgroup label="Serving containers"><option value="qwen38-flash">Qwen3.8 Flash-Next container</option><option value="qwen38-sglang">Qwen3.8 27B container</option><option value="qwen38-kolibri">Kolibri-1 container</option><option value="qwen38-nemotron">Nemotron 3.5 Bolt container</option><option value="qwen38-nemotron-super">Nemotron 3.5 Super VL container</option><option value="qwen38-flash-local">Qwen3.8 Flash-Next FP4-Local container</option><option value="qwen38-ornith-122b">Ornith 1.5 122B container</option></optgroup>
+            <optgroup label="Unit journals"><option value="qwen38-flash.service">Qwen3.8 Flash-Next journal</option><option value="qwen38-sglang.service">Qwen3.8 27B journal</option><option value="qwen38-image.service">Qwen-Image 2.1 journal</option><option value="qwen38-video.service">MiniMax-H3 journal</option><option value="qwen38-kolibri.service">Kolibri-1 journal</option><option value="qwen38-nemotron.service">Nemotron 3.5 Bolt journal</option><option value="qwen38-nemotron-super.service">Nemotron 3.5 Super VL journal</option><option value="qwen38-flash-local.service">Qwen3.8 Flash-Next FP4-Local journal</option><option value="qwen38-ornith-122b.service">Ornith 1.5 122B journal</option><option value="qwen38-keepalive.service">proxy journal</option><option value="opencode-web.service" id="log-opt-agent">agent server journal</option></optgroup>
           </select>
           <label class="switch"><input type="checkbox" id="log-follow"> Follow</label>
           <input class="input grow" id="log-filter" type="search" placeholder="Filter lines" aria-label="Filter lines">
@@ -580,7 +586,7 @@
     <!-- ══ SETTINGS ═════════════════════════════════════════════════════════ -->
     <section class="view" id="view-settings" aria-labelledby="h-settings">
       <div class="vhead">
-        <div><h1 id="h-settings">Settings</h1><p>The repo this box runs, the agent CLI's limits, and the cockpit itself.</p></div>
+        <div class="vhead-title"><h1 id="h-settings">Settings</h1><p>The repo this box runs, the agent CLI's limits, and the cockpit itself.</p></div>
       </div>
       <div class="grid g2">
         <section class="panel" data-src="opencode">

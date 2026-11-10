@@ -179,7 +179,7 @@ class TheCheckPins(PinsBase):
         rc, out = self.run_pins(None, "hf_secretvalue123")
         self.assertEqual(rc, 0, out)
         hf = [c for c in self.calls() if c["url"].startswith("https://huggingface.co/")]
-        self.assertEqual(len(hf), 26, hf)          # nine checkpoints, the diffusion lanes' three, the video Turbo adapter, Kolibri's two, each Nemotron lane's two (the model and its drafter), the Flash FP4-Local lane's two (its checkpoint and its DFlash2 drafter), the Ornith lane's one and the speech lane's four GGUF (two recognizers, each a model and its projector)
+        self.assertEqual(len(hf), 26, hf)          # nine checkpoints, the diffusion lanes' three, the video Turbo adapter, Kolibri's two, each Nemotron lane's two (the model and its drafter), the Qwen3.8 Flash-Next FP4-Local lane's two (its checkpoint and its DFlash2 drafter), the Ornith lane's one and the speech lane's four GGUF (two recognizers, each a model and its projector)
         for c in hf:
             self.assertIn("Authorization: Bearer hf_secretvalue123", c["stdin"], c)
             self.assertFalse(any("hf_secretvalue123" in a for a in c["argv"]), c["argv"])

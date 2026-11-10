@@ -103,7 +103,7 @@ class AProblemIsSaidOnceTheFormIsTouched(unittest.TestCase):
         self.assertIn("not serving", r["why"])
         self.assertFalse(r["after"], "once touched, the missing prompt is said")
         self.assertIn("Load MiniMax-H3", r["lane"])
-        self.assertIn("flash 176B", r["lane"], "and it says which lane holds the box")
+        self.assertIn("Qwen3.8 Flash-Next", r["lane"], "and it says which lane holds the box")
 
 
 class TheVideoShowsTheLanesRealProgress(unittest.TestCase):
@@ -196,6 +196,129 @@ class AFinishedJobsLogIsReadToItsEnd(unittest.TestCase):
         self.assertTrue(r["shown"])
 
 
+class AStopSaysItStops(unittest.TestCase):
+    """Issue #64 (2026-11-08, a user's capture on a wide screen): a Stop said "starting…" in the dock at the bottom
+    right while systemctl stopped the lane, its toast "started", and its log "(no output yet)" after it had ended with
+    exit code 0. systemctl prints nothing, and the page said nothing else."""
+
+    ARGV = ["sudo", "-n", "/usr/bin/systemctl", "stop", "qwen38-sglang.service"]
+
+    def test_the_dock_says_stopping_and_its_log_the_command(self):
+        r = run(self, r"""
+        const job = (status, extra) => Object.assign({id: 'j9', action: 'unit', params: {verb: 'stop', unit: 'qwen38-sglang.service'},
+            status, argv: %s, lines: [], started: Date.now() / 1000 - 7, elapsed: 7}, extra || {});
+        __fetch = async url => url === '/api/jobs/j9' ? __response(200, job('done', {rc: 0, ended: Date.now() / 1000}))
+          : new Promise(() => {});
+        feed({job: {current: job('running'), recent: []}});
+        const running = {last: txt('dock-last'), log: txt('dock-pre')};
+        feed({job: {current: null, recent: [job('done', {rc: 0, ended: Date.now() / 1000})]}});
+        await __settle();
+        const ended = {last: txt('dock-last'), log: txt('dock-pre')};
+        feed({job: {current: null, recent: [job('done', {rc: 0, ended: Date.now() / 1000})]}});
+        report({running, ended, again: txt('dock-pre')});
+        """ % json.dumps(self.ARGV))
+        cmd = "$ " + " ".join(self.ARGV)
+        self.assertEqual(r["running"], {"last": "stopping, nothing printed yet", "log": cmd + "\n(nothing printed yet)"})
+        self.assertEqual(r["ended"], {"last": "finished, exit code 0", "log": cmd + "\n(it printed nothing)"})
+        self.assertEqual(r["again"], r["ended"]["log"], "the next job event keeps what the fetch said")
+
+    def test_a_page_opened_after_the_end_says_nothing_it_has_not_read(self):
+        # review of v1.45.0: "(it printed nothing)" was said of a job whose lines had not been read yet, and for good
+        # when reading them failed
+        r = run(self, r"""
+        __fetch = url => url === '/api/jobs/j7' ? Promise.resolve(__response(500, {})) : new Promise(() => {});
+        const done = {id: 'j7', action: 'switch', params: {target: 'flash'}, status: 'done', rc: 0,
+                      argv: ['bash', '/r/switch-model.sh', 'flash'], started: Date.now() / 1000 - 30, ended: Date.now() / 1000 - 2, elapsed: 28};
+        feed({job: {current: null, recent: [done]}});
+        await __settle();
+        feed({job: {current: null, recent: [done]}});
+        report({log: txt('dock-pre')});
+        """)
+        self.assertEqual(r["log"], "$ bash /r/switch-model.sh flash\n(reading its log…)")
+
+    def test_a_dry_run_shows_no_command_as_run(self):
+        # review of v1.45.0: "$ sudo ... stop ..." over the server's "[dry run] would run: ..." said it had run
+        r = run(self, r"""
+        feed({job: {current: {id: 'j6', action: 'unit', params: {verb: 'stop', unit: 'qwen38-sglang.service'}, status: 'running',
+              dry_run: true, argv: %s, lines: ['[dry run] would run: sudo -n /usr/bin/systemctl stop qwen38-sglang.service'],
+              started: Date.now() / 1000 - 1, elapsed: 1}, recent: []}});
+        report({log: txt('dock-pre')});
+        """ % json.dumps(self.ARGV))
+        self.assertEqual(r["log"], "[dry run] would run: sudo -n /usr/bin/systemctl stop qwen38-sglang.service")
+
+    def test_a_job_that_prints_keeps_its_lines_under_its_command(self):
+        r = run(self, r"""
+        feed({job: {current: {id: 'j8', action: 'switch', params: {target: 'flash'}, status: 'running', elapsed: 3,
+              argv: ['bash', '/r/switch-model.sh', 'flash'], lines: ['fetching', 'done'], started: Date.now() / 1000 - 3}, recent: []}});
+        report({last: txt('dock-last'), log: txt('dock-pre')});
+        """)
+        self.assertEqual(r, {"last": "done", "log": "$ bash /r/switch-model.sh flash\nfetching\ndone"})
+
+    def test_the_sheet_and_the_toast_of_a_stop_never_say_started(self):
+        r = run(self, r"""
+        let answer;
+        __fetch = (url, init) => url === '/api/csrf' ? __response(200, {token: 't'})
+          : url === '/api/action' ? new Promise(res => { answer = res; }) : new Promise(() => {});
+        askAction('unit', {verb: 'stop', unit: 'qwen38-sglang.service'});
+        $('sh-go').click(); await __settle();
+        const between = txt('sh-status');
+        answer(__response(202, {job: 'j9', argv: %s, warnings: [], dry_run: false})); await __settle();
+        report({between, toast: toastText()});
+        """ % json.dumps(self.ARGV))
+        self.assertEqual(r["between"], "sending…")
+        self.assertIn(": running. The dock follows it.", r["toast"])
+        self.assertNotIn("start", (r["between"] + r["toast"]).lower())
+
+
+class ThePageFitsEveryScreen(unittest.TestCase):
+    """Hasan, 2026-11-08: "que le cockpit s'affiche bien partout, mobile, énorme écran, tablette, pc". A user's capture at
+    2563 px (issue #64) showed the page held at 1560 px on the left of the screen and nothing on the rest, and every
+    view's head took about 100 px, a 40 px title over its sentence (captures at ten sizes, from 3440 px to 375 px)."""
+
+    def rules(self, selector, media=None):
+        return [d.replace(" ", "") for s, m, d in css_rules()
+                if selector in [x.strip() for x in s.split(",")] and m == ([media] if media else [])]
+
+    def test_the_page_grows_with_a_wide_screen_then_stays_centred(self):
+        (d,) = self.rules(".stage")
+        self.assertIn("max-width:3200px", d)
+        self.assertIn("margin-inline:auto", d)
+
+    def test_its_lists_take_more_columns_on_a_wide_screen(self):
+        cols = lambda n: f"grid-template-columns:repeat({n},minmax(0,1fr))"
+        self.assertIn(cols(4), self.rules(".rack", "@media (min-width:1900px)")[0])
+        self.assertIn(cols(2), self.rules("#lanes-list", "@media (min-width:2300px)")[0])
+        self.assertIn(cols(5), self.rules(".rack", "@media (min-width:2600px)")[0])
+        self.assertIn(cols(4), self.rules(".wide4", "@media (min-width:3000px)")[0])
+        self.assertIn('<div class="grid g2 wide4">', (pagejs.STATIC / "index.html").read_text(), "the Machine view's four panels")
+
+    def test_four_versions_stand_two_by_two_only_where_two_fit(self):
+        # the CI's click storm (2026-11-08): two fixed columns of "Abliterated NVFP4 · edp1096" (224 px) ran 45 px off
+        # a 390 px phone; the columns now come from the width, one under the other where two do not fit
+        (d,) = self.rules(".pick:has(> .opt:nth-child(4))")
+        self.assertIn("grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))", d)
+        self.assertNotIn("1fr1fr", d)
+
+    def test_a_toolbar_field_is_never_wider_than_its_row(self):
+        # captures of 2026-11-08: the Logs source, as wide as "Qwen3.8 Flash-Next FP4-Local container", ran 11 px off
+        # a 375 px phone
+        (d,) = self.rules(".toolbar .input")
+        self.assertIn("max-width:100%", d)
+        self.assertIn("min-width:0", d)
+
+    def test_a_views_head_is_its_name_with_its_sentence_beside_it(self):
+        (h1,) = self.rules(".vhead h1")
+        self.assertIn("font-size:var(--t-24)", h1)
+        (row,) = self.rules(".vhead-title")
+        self.assertIn("display:flex", row)
+        self.assertIn("flex-wrap:wrap", row)
+        page = (pagejs.STATIC / "index.html").read_text()
+        self.assertEqual(page.count('<div class="vhead">'), page.count('<div class="vhead-title"><h1'), "each head names its title")
+        (lede,) = self.rules(".vhead p")
+        self.assertIn("font-size:var(--t-14)", lede)
+        self.assertNotIn("margin-top", lede)
+
+
 class ANewLaneIsNotNamedAfterTheOldCheckpoint(unittest.TestCase):
     """U19: the served target comes from the text engine's /server_info, read every 30 s,
     and outlived a change of lane: a flash lane that had just replaced the 27B read
@@ -209,8 +332,8 @@ class ANewLaneIsNotNamedAfterTheOldCheckpoint(unittest.TestCase):
         feed({lifecycle: life({'qwen38-sglang.service': eng('stopped'), 'qwen38-flash.service': eng('ready', {target: 'flash-uncensored'})})});
         report({label: laneLabel('qwen38-flash.service'), spine: txt('serving-name'), sel: LCARDS.get('qwen38-flash.service').target});
         """)
-        self.assertEqual(r["label"], "flash 176B uncensored")
-        self.assertIn("flash 176B uncensored", r["spine"])
+        self.assertEqual(r["label"], "Qwen3.8 Flash-Next abliterated NVFP4 · dealignai")
+        self.assertIn("Qwen3.8 Flash-Next abliterated NVFP4 · dealignai", r["spine"])
         self.assertEqual(r["sel"], "flash-uncensored")
 
 
@@ -272,7 +395,7 @@ class SwitchPhrasesNameTheLane(unittest.TestCase):
         """)
         self.assertEqual(len(set(r)), len(r), r)
         self.assertIn("27B", r[1])
-        self.assertIn("flash", r[5])
+        self.assertIn("Flash-Next abliterated", r[5])
         self.assertIn("MiniMax-H3", r[8])
         self.assertIn("Turbo", r[9])
 
@@ -818,7 +941,8 @@ class AVideoLaneIsNotNamedAfterItsOwnModel(unittest.TestCase):
         feed({lifecycle: life({'qwen38-video.service': eng('ready', {target: 'video'}), 'qwen38-image.service': eng('ready', {target: 'image'})})});
         report([laneLabel('qwen38-video.service'), laneLabel('qwen38-image.service')]);
         """)
-        self.assertEqual(r, ["MiniMax-H3", "Qwen-Image 2.1"])
+        # their official names (decision 1180): the model once, then who publishes it
+        self.assertEqual(r, ["MiniMax-H3 · MiniMax", "Qwen-Image 2.1 · Qwen"])
 
 
 class LoadingALaneIsOneJourney(unittest.TestCase):
@@ -869,6 +993,118 @@ class LoadingALaneIsOneJourney(unittest.TestCase):
         self.assertEqual(r["afterSecond"], 2)
         self.assertEqual(r["names"], ["switch:video", "unit:stop", "unit:start"])
 
+
+class AClientIsToldWhereToSendItsRequests(unittest.TestCase):
+    """Hasan (2026-10-18): the address to give a client, plain and in sight, for whoever reads nothing else. The Now
+    view says it with the model that serves and where the key is, ready to copy, and never shows the key."""
+
+    BODY = r"""
+    location.hostname = %s;
+    feed({config: CONFIG, units: UNITS, lifecycle: life({'qwen38-sglang.service': eng('ready')}),
+          engine_info: {served_target: 'stock', info: {served_model_name: 'qwen3.8-27b'}},
+          api: {known: true, port: 30001, bind: %s, tls: %s, client_keys: false, key_file: '/home/u/.config/qwen38/api-key',
+                addresses: [{iface: 'tailscale0', addr: '100.101.102.103'}, {iface: 'enP7s7', addr: '192.168.1.20'}]}});
+    report({facts: txt('api-facts'), aside: txt('api-aside'), buttons: [...$('api-copy').children].map(b => b.textContent)});
+    """
+
+    def test_the_address_the_page_was_reached_by_the_model_and_where_the_key_is(self):
+        r = run(self, self.BODY % ("'100.101.102.103'", "'0.0.0.0'", "false"))
+        self.assertIn("OpenAI APIhttp://100.101.102.103:30001/v1", r["facts"])
+        self.assertIn("Anthropic APIhttp://100.101.102.103:30001", r["facts"])
+        self.assertIn("Modelqwen3.8-27b", r["facts"])
+        self.assertIn("/home/u/.config/qwen38/api-key on the box", r["facts"])
+        self.assertNotIn("Other machines", r["facts"])
+        self.assertEqual(r["buttons"], ["Copy the address", "Copy for Claude Code, on the box", "Copy a test",
+                                        "Every client, step by step"])
+
+    def test_a_proxy_on_the_box_alone_says_so_and_tls_is_https(self):
+        r = run(self, self.BODY % ("'100.101.102.103'", "'127.0.0.1'", "false"))
+        self.assertIn("OpenAI APIhttp://127.0.0.1:30001/v1", r["facts"])
+        self.assertIn("Other machines", r["facts"])
+        self.assertEqual(r["aside"], "from this box only")
+        self.assertIn("(PROXY_BIND=127.0.0.1)", r["facts"])
+        r = run(self, self.BODY % ("'box.example.ts.net'", "'0.0.0.0'", "true"))
+        self.assertIn("OpenAI APIhttps://box.example.ts.net:30001/v1", r["facts"])
+
+    def test_the_reviews_cases(self):
+        # review of v1.45.1: client keys refuse the cockpit's login; an IPv6 page; the model of the lane before a switch;
+        # a port not read; a file not read; the panel rebuilt at every tick of the lanes lost a selection
+        r = run(self, r"""
+        let copied = null; copyText = t => { copied = t; };
+        location.hostname = '[fd7a:115c::1]';
+        const api = (o) => Object.assign({known: true, port: 30001, bind: '0.0.0.0', tls: false, client_keys: false,
+                                          key_file: '/home/u/.config/qwen38/api-key', addresses: []}, o);
+        feed({config: CONFIG, units: UNITS, lifecycle: life({'qwen38-sglang.service': eng('ready')}),
+              engine_info: {served_target: 'stock', info: {served_model_name: 'qwen3.8-27b'}}, api: api({client_keys: true})});
+        const v6 = txt('api-facts');
+        [...$('api-copy').children].find(b => b.textContent === 'Copy a test').click();
+        const test = copied;
+        const dd = $('api-facts').querySelector('dd');
+        feed({lifecycle: life({'qwen38-sglang.service': eng('ready', {elapsed: 602})})});
+        const same = $('api-facts').querySelector('dd') === dd;
+        feed({lifecycle: life({'qwen38-sglang.service': eng('ready', {target: 'uncensored'})})});
+        const switched = txt('api-facts');
+        feed({api: api({known: false, env_unread: true})});
+        report({v6, test, same, switched, aside: txt('api-aside'), unread: txt('api-facts')});
+        """)
+        self.assertIn("OpenAI APIhttp://[fd7a:115c::1]:30001/v1", r["v6"])
+        self.assertIn("a client key of yours", r["v6"])
+        self.assertIn("the cockpit's login included", r["v6"])
+        self.assertIn("-H @<(printf 'Authorization: Bearer %s\\n' \"$YOUR_CLIENT_KEY\")", r["test"])
+        self.assertNotIn("api-key", r["test"])
+        self.assertNotIn('-H "Authorization', r["test"], "the key in curl's arguments, read by any local user")
+        self.assertTrue(r["same"], "rebuilt though nothing it says changed")
+        self.assertIn("Modelreading the lane that serves", r["switched"])
+        self.assertEqual(r["aside"], "its port not read: 30001 assumed")
+        self.assertIn("Not readthe proxy's environment file", r["unread"])
+
+    def test_a_page_opened_on_the_box_gives_its_other_addresses(self):
+        # a proxy on every interface, the page on 127.0.0.1: it said the proxy listened on the box only, with
+        # PROXY_BIND=0.0.0.0 to open it (captures of 2026-11-09)
+        r = run(self, self.BODY % ("'127.0.0.1'", "'0.0.0.0'", "false"))
+        self.assertNotIn("Other machines", r["facts"])
+        self.assertNotEqual(r["aside"], "from this box only")
+        self.assertIn("From another machinehttp://100.101.102.103:30001/v1 (tailscale0)\nhttp://192.168.1.20:30001/v1 (enP7s7)",
+                      r["facts"])
+
+
+
+class ALaneSaysTheWindowItsUnitRuns(unittest.TestCase):
+    """Discussion #63 (2026-11-09): FLASH_LOCAL_CONTEXT=1m serves 1,048,576 tokens, and the lane's words, written for its
+    native window, said "262K tokens of context" of it. The engine table reads each unit's window."""
+
+    def test_the_fp4_local_lane_says_1m_when_its_unit_runs_it(self):
+        r = run(self, r"""
+        const row = (window) => ({engine: 'vLLM', version: 'b12x build 8244d1c', label: 'vLLM b12x build 8244d1c', pin: 'p',
+                                  reports: 'x', pinned: true, window});
+        const U = JSON.parse(JSON.stringify(UNITS)); U.units['qwen38-flash-local.service'] = {active: 'inactive', enabled: 'disabled'};
+        feed({config: CONFIG, units: U, lifecycle: life({'qwen38-sglang.service': eng('ready')}),
+              engine_table: {table: {'qwen38-flash-local.service': row(262144)}}});
+        const native = BAYS.get('qwen38-flash-local.service').kind.textContent;
+        feed({engine_table: {table: {'qwen38-flash-local.service': row(1048576)}}, lifecycle: life({'qwen38-sglang.service': eng('ready')})});
+        report({native, wide: BAYS.get('qwen38-flash-local.service').kind.textContent});
+        """)
+        self.assertEqual(r["native"], "Text and images, 262K tokens of context")
+        self.assertEqual(r["wide"], "Text and images, 1M tokens of context")
+
+    def test_the_lane_that_serves_says_its_engines_window(self):
+        # a unit staged again while its lane serves names a window its engine does not run yet: the page said "1M" of
+        # an engine serving 262,144 (code review of v1.45.2). The lane that serves says its engine's, the unit the others
+        r = run(self, r"""
+        const row = (window) => ({engine: 'vLLM', version: 'b12x build 8244d1c', label: 'vLLM b12x build 8244d1c', pin: 'p',
+                                  reports: 'x', pinned: true, window});
+        const U = JSON.parse(JSON.stringify(UNITS)); U.units['qwen38-flash-local.service'] = {active: 'active', enabled: 'enabled'};
+        const life2 = life({'qwen38-flash-local.service': eng('ready')});
+        feed({config: CONFIG, units: U, lifecycle: life2, engine_table: {table: {'qwen38-flash-local.service': row(1048576)}}});
+        feed({engine_info: {served_target: null, info: {context_length: 262144, version: '0.20.1'}}});
+        feed({lifecycle: life2, engine_table: {table: {'qwen38-flash-local.service': row(1048576)}}});
+        const restaged = BAYS.get('qwen38-flash-local.service').kind.textContent;
+        feed({engine_info: {served_target: null, info: {context_length: 1048576, version: '0.20.1'}}});
+        feed({lifecycle: life2, engine_table: {table: {'qwen38-flash-local.service': row(262144)}}});
+        report({restaged, wide: BAYS.get('qwen38-flash-local.service').kind.textContent});
+        """)
+        self.assertEqual(r["restaged"], "Text and images, 262K tokens of context")
+        self.assertEqual(r["wide"], "Text and images, 1M tokens of context")
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,9 +4,9 @@
   <img src="docs/img/tour.webp" width="270" alt="The cockpit in ten seconds: a laptop and a phone driving the box, the live memory, a coding agent whose test passes, an image and a video made on the box, the seven lanes">
 </p>
 <p align="center"><a href="#see-it-in-49-seconds">Watch the 49-second tour, with sound</a></p>
-<p align="center"><a href="https://hasso5703.github.io/">The website: every model measured, guides, every GB10 machine</a></p>
+<p align="center"><a href="https://alzeo.ai/">The website: every model measured, guides, every GB10 machine</a></p>
 
-**Qwen3.8-27B at 65.2 to 68.5 tok/s with a 1M context, Qwen3.8-Flash-Next 176B on a single box, images,
+**Qwen3.8-27B at 65.2 to 68.5 tok/s with a 1M context, Qwen3.8 Flash-Next (176B) on a single box, images,
 video, Kolibri-1, Nemotron 3.5 Bolt, Nemotron 3.5 Super VL and Ornith 1.5 122B: installed and pinned by one command**, the lane that serves proved before it ends and every other built at its first Load, on a DGX Spark or another
 GB10 box such as the ASUS Ascent GX10. No prompt, image or video leaves the box.
 
@@ -24,8 +24,8 @@ its folder and services keep their names, and every old address of the repositor
 
 | Model | Measured on the reference box, an ASUS Ascent GX10 |
 |---|---|
-| Qwen3.8-27B, NVFP4 + DFlash2 | **65.2 and 68.5 tok/s** greedy median (two runs), 44.0 alone and 80.6 at 4 requests on 8,192-token prompts, 1M context (2026-11-05) |
-| Qwen3.8-Flash-Next 176B, on **one** box | **47.9 tok/s** on code (`FLASH_TIER=context`), 262K context |
+| Qwen3.8 27B NVFP4 · RadixArk, with its DFlash2 draft | **65.2 and 68.5 tok/s** greedy median (two runs), 44.0 alone and 80.6 at 4 requests on 8,192-token prompts, 1M context (2026-11-05) |
+| Qwen3.8 Flash-Next (176B), on **one** box | **47.9 tok/s** on code (`FLASH_TIER=context`), 262K context |
 | Qwen-Image 2.1, 1024×1024 | **7.5 s** with its Turbo, 34 s without |
 
 A second ASUS Ascent GX10, set up from scratch with that one command: [what it measured](docs/asus-gx10.md).
@@ -63,7 +63,7 @@ builds on its published config,
 takes its measurements as its DGX Spark reference, and it is listed in
 [awesome-dgx-spark](https://github.com/bidual/awesome-dgx-spark).
 
-![The cockpit's Now view: one pool of unified memory and what holds it, and the eight lanes in their rack with their makers' marks, the serving one edged in green](docs/img/cockpit-now.png)
+![The cockpit's Now view: one pool of unified memory and what holds it, then the lanes in their rack with their makers' marks, the serving one edged in green, and Qwen4 27B to come](docs/img/cockpit-now.png)
 
 *The cockpit, installed by default: one pool of unified memory, lanes that take turns in it, and the whole box run from a browser, on a laptop or a phone.*
 
@@ -79,7 +79,7 @@ its test on the 27B, Qwen-Image 2.1 made the image in 40 steps and MiniMax-H3 th
 
 One command installs a boot-persistent, hardened serving stack on a single DGX Spark,
 and it is not one model: **large language models** (the Qwen3.8 family, seven
-switchable targets, 27B at 71 tok/s and Flash-Next 176B on one box), **typed decisions**
+switchable targets, 27B at 65 to 68 tok/s and Qwen3.8 Flash-Next (176B) on one box), **typed decisions**
 (a System One endpoint speaking TypeSafe's Jev contract: calibrated probabilities
 instead of generated text), **image generation** (Qwen-Image 2.1) and **video generation**
 (MiniMax-H3), and on vLLM **Aleph Alpha's Kolibri-1** since v1.29, **NVIDIA's Nemotron 3.5
@@ -93,13 +93,13 @@ The two Qwen text lanes come with **seven switchable targets**, and speculation 
 
 | target | model | engine | headline (measured here) |
 |---|---|---|---|
-| `stock` (default) | Qwen3.8-27B NVFP4 | SGLang + DFlash2 | **65.2 and 68.5 tok/s** greedy median, 44.0 alone and 80.6 at 4 requests on 8,192-token prompts (2026-11-05), 1M context by default |
-| `uncensored` | Qwen3.8-27B abliterated NVFP4 | SGLang + DFlash2 | same speed and serving path as stock |
-| `fp8` | Qwen3.8-27B FP8, Qwen's own release | SGLang + DFlash2 | the quantization reference: 108 tok/s aggregate at 8 streams, ~92K less KV pool |
-| `uncensored-fp8` | Qwen3.8-27B abliterated FP8 | SGLang + DFlash2 | same serving path and same cost as `fp8` |
-| `flash` (default of its lane) | **Qwen3.8-Flash-Next 176B** hybrid MoE NVFP4 | SGLang + NEXTN | **47.9 tok/s on code, 47.1 on math, 29-31 on prose, 27.0 ms/tok on an agent loop (all at the `context` tier), prefix caching, vision**, 262K on ONE box |
-| `flash-uncensored` | the **abliterated** build of that same tree | SGLang + NEXTN | 205 of 206 shards identical in size to stock, so the same flags: 45-46 on code, **0 refusals of 5** |
-| `flash-nvda` | the same 176B from NVIDIA's mixed-precision export | SGLang + NEXTN | same N-gram table byte for byte, its own expert calibration: ties `flash` on every quality probe, with a KV pool about 9% smaller |
+| `stock` (default) | Qwen3.8 27B NVFP4 · RadixArk | SGLang 0.5.22 + DFlash2 | **65.2 and 68.5 tok/s** greedy median, 44.0 alone and 80.6 at 4 requests on 8,192-token prompts (2026-11-05), 1M context by default |
+| `uncensored` | Qwen3.8 27B abliterated NVFP4 · edp1096 | SGLang 0.5.22 + DFlash2 | same speed and serving path as `stock` |
+| `fp8` | Qwen3.8 27B FP8 · Qwen, Qwen's own release | SGLang 0.5.22 + DFlash2 | the quantization reference: 108 tok/s aggregate at 8 streams, ~92K less KV pool |
+| `uncensored-fp8` | Qwen3.8 27B abliterated FP8 · edp1096 | SGLang 0.5.22 + DFlash2 | same serving path and same cost as `fp8` |
+| `flash` (default of its lane) | **Qwen3.8 Flash-Next NVFP4 · RadixArk**, a 176B hybrid MoE | SGLang nightly 53295c6 + NEXTN | **47.9 tok/s on code, 47.1 on math, 29-31 on prose, 27.0 ms/tok on an agent loop (all at the `context` tier), prefix caching, vision**, 262K on ONE box |
+| `flash-uncensored` | Qwen3.8 Flash-Next abliterated NVFP4 · dealignai, the **abliterated** build of that same tree | SGLang nightly 53295c6 + NEXTN | 205 of 206 shards identical in size to `flash`, so the same flags: 45-46 on code, **0 refusals of 5** |
+| `flash-nvda` | Qwen3.8 Flash-Next NVFP4 · NVIDIA, the same 176B from NVIDIA's mixed-precision export | SGLang nightly 53295c6 + NEXTN | same N-gram table byte for byte, its own expert calibration: ties `flash` on every quality probe, with a KV pool about 9% smaller |
 
 The 27B path is the fastest configuration measured so far on GB10 (**SGLang + NVFP4 + DFlash2 speculative decoding with deterministic kernels, drafting from a calibrated NVFP4 head 16 deep**): **65.2 and 68.5 tok/s greedy median on `./bench.sh`** on 2026-11-05, two runs on SGLang v0.5.22 without torch.compile, the lane v1.44.0 serves (44.0 tok/s alone and 80.6 in all at 4 requests on SGLang's official benchmark, 8,192 tokens in and 1,024 out, GSM8K 99.2% on 250 questions; with torch.compile the same day, 71.0 and 67.4 on `./bench.sh`, 42.9 and 77.0 on the official benchmark, see the CHANGELOG). Before: 71.4 measured 2026-09-17 on SGLang v0.5.19, when this lane moved to the official release image (on v0.5.21 since v1.23: the same 105 to 108 ms per drafter step; on v0.5.22 since v1.39, faster at 1 and 4 streams in the same night's A/B), against 69.8 on the image it replaced and 65.3 on the v1.9 campaign before it (per probe then: code 64.2-65.3, reasoning 65.3-66.2, math 56.6-71.3, prose 23.0-24.7). Free prose is the slow case on any drafter. **135-148 tok/s aggregate at 8 concurrent streams, 258 at 32** (carried over from the v1.2 battery; the draft only helps concurrency, re-measure on your box with `./bench-matrix.sh`). Reproducible to the decimal across boots in the August study, once the kernels were made deterministic (BENCHMARKS.md, "The boot lottery"); on 2026-11-05, two runs on one boot of the lane v1.44.0 serves gave 65.2 and 68.5.
 
@@ -122,7 +122,7 @@ The README is the entry point. Everything longer lives next to it, one subject p
 | The Kolibri lane: every number, the builds tried and why this one | [docs/kolibri-lane.md](docs/kolibri-lane.md) |
 | The Nemotron 3.5 Bolt lane: every number, the settings tried and why these | [docs/nemotron-lane.md](docs/nemotron-lane.md) |
 | The Nemotron 3.5 Super VL lane: every number, the builds tried and why this one | [docs/nemotron-super-lane.md](docs/nemotron-super-lane.md) |
-| The Flash FP4-Local lane, NVIDIA's FP4 build of the flash model: every number and the recipe | [docs/flash-local-lane.md](docs/flash-local-lane.md) |
+| The Qwen3.8 Flash-Next FP4-Local lane, NVIDIA's FP4 build of the flash model: every number and the recipe | [docs/flash-local-lane.md](docs/flash-local-lane.md) |
 | The Ornith 1.5 122B lane: every number, the engines tried and why this one | [docs/ornith-lane.md](docs/ornith-lane.md) |
 | Models on an external disk: what can live there, what stays on the internal one | [docs/external-disk.md](docs/external-disk.md) |
 | The cockpit, view by view, including the Agent view and how it behaves on a phone | [docs/cockpit.md](docs/cockpit.md) |
@@ -169,15 +169,15 @@ The README is the entry point. Everything longer lives next to it, one subject p
                          +-----------------------------+
 ```
 
-The engine answers `/health` even when it is wedged, so the cockpit runs a real generation canary and reports `ready`, `loading`, `wedged` or `stopped` from that. Everything privileged the cockpit can do (unit start/stop/restart, lane switch, flush, abort) goes through an exact-argv sudoers allowlist and is audited. The Agent view frames opencode's own web interface behind the cockpit login, so sessions on the box run from a laptop or a phone with no terminal. Full tour: [docs/cockpit.md](docs/cockpit.md). Since v1.12 it is **installed by the one-liner like everything else**: when the installer finishes it prints the URL, and that page is where this box is meant to be driven from. `--no-cockpit` opts out, and the choice sticks.
+The engine answers `/health` even when it is wedged, so the cockpit runs a real generation canary and reports `ready`, `loading`, `wedged` or `stopped` from that. Everything privileged the cockpit can do (unit start/stop/restart, lane switch) goes through an exact-argv sudoers allowlist, flush and abort are calls with the box's key, and every action is audited. The Agent view frames opencode's own web interface behind the cockpit login, so sessions on the box run from a laptop or a phone with no terminal. Full tour: [docs/cockpit.md](docs/cockpit.md). Since v1.12 it is **installed by the one-liner like everything else**: when the installer finishes it prints the URL, and that page is where this box is meant to be driven from. `--no-cockpit` opts out, and the choice sticks.
 
 ## Quickstart
 
-Requirements: DGX Spark or other GB10 machine (128 GB unified, or a 64 GB DGX Spark with the lanes that fit it, [below](#on-a-64-gb-dgx-spark)), stock DGX OS (its Docker CE and NVIDIA Container Toolkit: Docker from the Snap package cannot start a GPU container beside that toolkit, and the installer stops on it before it pulls any image). What a new box lacks, the installer puts in itself: DGX OS's first-boot setup leaves the account it creates out of the `docker` group, and leaves out Python's headers and ffmpeg, which the image and video lanes build and run with. The installer adds the account to the group, saying so and why before it runs `sudo`, and goes on in the same terminal, with no need to log out. It installs `python3-dev` and `ffmpeg` (and `python3-venv` where it is missing), naming them as it does. Free disk for the whole box: about **930 GB** (GB of 10^9 bytes, rounded up), as the lanes measure on the reference box: the 27B lane 58 GB (22 checkpoint, 2 draft, 34 image), the flash lane 223 (136 checkpoint, 35 image, 52 for the PLE table it rewrites at every boot), the image lane 46 (34 checkpoint, 12 runtime and its build), the video lane 174 (145 checkpoint and its Turbo adapter, 12 runtime and its build, 17 for the runtime's own caches), the Kolibri lane 102 (79 checkpoint, 23 image), the Nemotron lane 51 (26 checkpoint and drafter, 25 image), the Nemotron Super lane 77 (its checkpoint and drafter; it runs the Nemotron lane's image, 102 without it), the Flash FP4-Local lane 121 (103 checkpoint, 18 image, and 32 more for the copy of its n-gram table when the cache is on another disk than the home directory's, [docs/external-disk.md](docs/external-disk.md)) and the Ornith 122B lane 78 (its checkpoint; it runs the Flash FP4-Local lane's image, 96 without it). Each lane checks its own room before it downloads anything (a lane on demand, at its first Load), and a lane installed whole that does not fit is left out and named at the end, with the command that adds it later, while the rest installs. What the text lanes check, in detail: for a 27B target, **49 GB** on the disk of `HF_CACHE` (`~/.cache/huggingface` by default) for the checkpoints and caches, and **52 GB** on the disk of Docker's images (`/var/lib/docker` on a stock box) for its 34 GB image (a pull's peak: Docker's containerd image store keeps the download beside the image); for a flash target, **248 GB** on the disk of `HF_CACHE` (194 for the checkpoint and its caches, 54 for the 52 GB PLE table the lane rewrites at every boot, counted on the disk of `PLE_DIR` instead when that is another one) and **53 GB** there for its 35 GB image. When both are one disk, as on a stock box, the installer asks for the sum there: **101 GB** for a 27B target, **301 GB** for a flash one. What the cache already holds of a checkpoint comes off its share (a checkpoint that is all there needs 11 GB of working room instead), and an image already pulled needs 6 GB instead of its own size. Caching the other 27B targets adds ~22 GB per NVFP4 target and ~31 GB per FP8 one.
+Requirements: DGX Spark or other GB10 machine (128 GB unified, or a 64 GB DGX Spark with the lanes that fit it, [below](#on-a-64-gb-dgx-spark)), stock DGX OS (its Docker CE and NVIDIA Container Toolkit: Docker from the Snap package cannot start a GPU container beside that toolkit, and the installer stops on it before it pulls any image). What a new box lacks, the installer puts in itself: DGX OS's first-boot setup leaves the account it creates out of the `docker` group, and leaves out Python's headers and ffmpeg, which the image and video lanes build and run with. The installer adds the account to the group, saying so and why before it runs `sudo`, and goes on in the same terminal, with no need to log out. It installs `python3-dev` and `ffmpeg` (and `python3-venv` where it is missing), naming them as it does. Free disk for the whole box: about **930 GB** (GB of 10^9 bytes, rounded up), as the lanes measure on the reference box: the 27B lane 58 GB (22 checkpoint, 2 draft, 34 image), the flash lane 223 (136 checkpoint, 35 image, 52 for the PLE table it rewrites at every boot), the image lane 46 (34 checkpoint, 12 runtime and its build), the video lane 174 (145 checkpoint and its Turbo adapter, 12 runtime and its build, 17 for the runtime's own caches), the Kolibri lane 102 (79 checkpoint, 23 image), the Nemotron lane 51 (26 checkpoint and drafter, 25 image), the Nemotron Super lane 77 (its checkpoint and drafter; it runs the Nemotron lane's image, 102 without it), the Qwen3.8 Flash-Next FP4-Local lane 121 (103 checkpoint, 18 image, and 32 more for the copy of its n-gram table when the cache is on another disk than the home directory's, [docs/external-disk.md](docs/external-disk.md)) and the Ornith 122B lane 78 (its checkpoint; it runs the Qwen3.8 Flash-Next FP4-Local lane's image, 96 without it). Each lane checks its own room before it downloads anything (a lane on demand, at its first Load), and a lane installed whole that does not fit is left out and named at the end, with the command that adds it later, while the rest installs. What the text lanes check, in detail: for a 27B target, **49 GB** on the disk of `HF_CACHE` (`~/.cache/huggingface` by default) for the checkpoints and caches, and **52 GB** on the disk of Docker's images (`/var/lib/docker` on a stock box) for its 34 GB image (a pull's peak: Docker's containerd image store keeps the download beside the image); for a flash target, **248 GB** on the disk of `HF_CACHE` (194 for the checkpoint and its caches, 54 for the 52 GB PLE table the lane rewrites at every boot, counted on the disk of `PLE_DIR` instead when that is another one) and **53 GB** there for its 35 GB image. When both are one disk, as on a stock box, the installer asks for the sum there: **101 GB** for a 27B target, **301 GB** for a flash one. What the cache already holds of a checkpoint comes off its share (a checkpoint that is all there needs 11 GB of working room instead), and an image already pulled needs 6 GB instead of its own size. Caching the other 27B targets adds ~22 GB per NVFP4 target and ~31 GB per FP8 one.
 
-One command, first install and updates alike. It clones or updates `~/dgx-spark-qwen38`, then runs the pinned installer, which installs the 27B, which serves, the keepalive proxy with its typed-decision endpoint, the opencode wiring, the cockpit and its Agent view, and every other lane **on demand**: their units now, and each one prepared at its first Load from the cockpit, as you, with no sudo, then its weights (Flash-Next 176B beside the 27B: 223 GB; images 46, video 174, Kolibri 102, Nemotron 51, Nemotron Super 77 beside it, 102 alone, Flash FP4-Local 121, Ornith 122B 78 beside it, 96 alone). The 27B proves it serves before the run ends; each other lane is built and started by its first Load. A new box downloads about 39 GB for the 27B (about 6 to 7 minutes at 100 MB/s). `--all-weights` installs the whole box now instead, as every run did before: about an hour and a half of work (92 minutes measured at v1.29.0, before the two Nemotron lanes, the weights cached), plus about 763 GB of downloads (about 127 minutes at 100 MB/s). It ends by printing the cockpit URL, and there is nothing left to run by hand.
+One command, first install and updates alike. It clones or updates `~/dgx-spark-qwen38`, then runs the pinned installer, which installs the 27B, which serves, the keepalive proxy with its typed-decision endpoint, the opencode wiring, the cockpit and its Agent view, and every other lane **on demand**: their units now, and each one prepared at its first Load from the cockpit, as you, with no sudo, then its weights (Flash-Next 176B beside the 27B: 223 GB; images 46, video 174, Kolibri 102, Nemotron 51, Nemotron Super 77 beside it, 102 alone, Qwen3.8 Flash-Next FP4-Local 121, Ornith 122B 78 beside it, 96 alone). The 27B proves it serves before the run ends; each other lane is built and started by its first Load. A new box downloads about 39 GB for the 27B (about 6 to 7 minutes at 100 MB/s). `--all-weights` installs the whole box now instead, as every run did before: about an hour and a half of work (92 minutes measured at v1.29.0, before the two Nemotron lanes, the weights cached), plus about 763 GB of downloads (about 127 minutes at 100 MB/s). It ends by printing the cockpit URL, and there is nothing left to run by hand.
 
-**Updating a box adds the lanes it does not have yet, on demand.** A lane a box never had (the flash beside the 27B, images, video, Kolibri, the two Nemotron lanes, Flash FP4-Local, Ornith 122B) gets its units, and its first Load from the cockpit prepares it; a lane already on the box (installed whole, from any version, or begun by a first Load) is updated whole, as before. `--all-weights` builds the new ones now and proves them, and `--with-<lane>` does it for one lane. To leave a lane out, pass its flag on each run that should leave it out (a `--no-<lane>` counts for the run that passes it only): `--no-kolibri`, `--no-nemotron`, `--no-nemotron-super`, `--no-flash-local`, `--no-ornith-122b`, `--no-flash` (or `--no-27b` on a flash box), `--no-image`, `--no-video`, after `bash -s --` on the one-liner.
+**Updating a box adds the lanes it does not have yet, on demand.** A lane a box never had (the flash beside the 27B, images, video, Kolibri, the two Nemotron lanes, Qwen3.8 Flash-Next FP4-Local, Ornith 122B) gets its units, and its first Load from the cockpit prepares it; a lane already on the box (installed whole, from any version, or begun by a first Load) is updated whole, as before. `--all-weights` builds the new ones now and proves them, and `--with-<lane>` does it for one lane. To leave a lane out, pass its flag on each run that should leave it out (a `--no-<lane>` counts for the run that passes it only): `--no-kolibri`, `--no-nemotron`, `--no-nemotron-super`, `--no-flash-local`, `--no-ornith-122b`, `--no-flash` (or `--no-27b` on a flash box), `--no-image`, `--no-video`, after `bash -s --` on the one-liner.
 
 ```bash
 curl -fsSL https://get.alzeo.ai | bash
@@ -202,10 +202,11 @@ cd ~/dgx-spark-qwen38
 ./bench.sh              # verify your tok/s
 ```
 
-First boot takes **~7-9 minutes** for a 27B target (CUDA graph capture + kernel compilation, cached afterwards; later boots ~5-7 min) and **~12-15 minutes** for a flash target, every boot: the server writes the whole 47.7 GiB N-gram table into its file each time (measured here: 12 min 21 s to `/health` on a fresh table). The Flash FP4-Local lane writes no table: 17 minutes at its first boot, while b12x tunes its kernels for this GPU, then about 5 and a half. With `--all-weights` the install then proves each other lane it built, one after the other while the served one waits, and brings it back; a plain install leaves each to its first Load. Then:
+First boot takes **~7-9 minutes** for a 27B target (CUDA graph capture and kernel compilation; later boots 3.5 to 6.5 minutes on the reference box for the default NVFP4 · RadixArk, a median of 3 min 43 s over its last twelve, and about 7 to 8 minutes for its abliterated and FP8 versions, as the cockpit's Lanes view counts them) and **~12-15 minutes** for a flash target, every boot: the server writes the whole 47.7 GiB N-gram table into its file each time (measured here: 12 min 21 s to `/health` on a fresh table). The Qwen3.8 Flash-Next FP4-Local lane writes no table: 17 minutes at its first boot, while b12x tunes its kernels for this GPU, then about 5 and a half. With `--all-weights` the install then proves each other lane it built, one after the other while the served one waits, and brings it back; a plain install leaves each to its first Load. Then:
 
 - **opencode**: ready config at `~/.config/qwen38/opencode.json`, see [opencode integration](docs/opencode.md)
-- **Any OpenAI client**: `http://<host>:30001/v1/chat/completions`, model `qwen3.8-27b` (flash: `qwen3.8-flash-next`, Flash FP4-Local: `qwen3.8-flash-next-fp4`, Kolibri: `kolibri-1`, Bolt: `nemotron-3.5-bolt`, Super VL: `nemotron-3.5-super-vl`, Ornith: `ornith-1.5-122b`), Bearer key from `~/.config/qwen38/api-key`
+- **The address to copy**: the cockpit's Now view gives it, with the model that serves and where the key is ("Connect a client")
+- **Any OpenAI client**: `http://<host>:30001/v1/chat/completions`, model `qwen3.8-27b` (flash: `qwen3.8-flash-next`, Qwen3.8 Flash-Next FP4-Local: `qwen3.8-flash-next-fp4`, Kolibri: `kolibri-1`, Bolt: `nemotron-3.5-bolt`, Super VL: `nemotron-3.5-super-vl`, Ornith: `ornith-1.5-122b`), Bearer key from `~/.config/qwen38/api-key`
 - **Anthropic protocol**: `http://<host>:30001/v1/messages` (`Authorization: Bearer` only, not `x-api-key`)
 - **Claude Code**: `claude-local` (installed beside `oc`) runs it on the lane that serves, with that lane's context and answer budget: [docs/clients.md](docs/clients.md)
 - Both are the **keepalive proxy**, not the engine: it relays every route the engine serves and adds the guards for the requests SGLang dies on rather than refuses. Since v1.17 the engine itself binds `127.0.0.1` and `:30000` answers on the box only ([docs/clients.md](docs/clients.md), [SECURITY.md](SECURITY.md))
@@ -227,7 +228,7 @@ a 64 GB box it installs what fits it, nothing else, and ends its first install o
 | Nemotron 3.5 Bolt | the lane it serves, with a memory share of its own: 667,874 tokens of KV (2.55 times its 262,144-token window), 110.8 tok/s greedy median on `bench.sh` |
 | Qwen3.8-27B in NVFP4 | a Load away, its native window in a unit sized for 64 GB: two requests at a time, 59,625 tokens of KV, 67.2 tok/s greedy median |
 | Speech (`./install-speech.sh`) | as on any box, on the CPU |
-| the flash lane, `CONTEXT_MODE=1m`, the FP8 targets, images, video, Kolibri-1, Nemotron 3.5 Super VL, Flash FP4-Local, Ornith 1.5 122B | refused, as they need a 128 GB DGX Spark |
+| the flash lane, `CONTEXT_MODE=1m`, the FP8 targets, images, video, Kolibri-1, Nemotron 3.5 Super VL, Qwen3.8 Flash-Next FP4-Local, Ornith 1.5 122B | refused, as they need a 128 GB DGX Spark |
 
 Each refusal comes before a byte is fetched or pulled: in `install.sh`, in each lane's installer, in
 `switch-model.sh`, and so in the cockpit's Load, where a lane a 64 GB box cannot hold says it needs
@@ -246,24 +247,24 @@ Everything below is optional and combinable. Variables ride on the `bash` side o
 
 | Choice | How | Default | Notes |
 |---|---|---|---|
-| Model | `MODEL_CHOICE=stock`, `uncensored`, `fp8`, `uncensored-fp8`, `flash`, `flash-uncensored`, `flash-nvda` | `stock` | 27B NVFP4 stock or abliterated, the same pair in Qwen's FP8, or Flash-Next 176B in one of three NVFP4 exports (see the seven targets) |
+| Model | `MODEL_CHOICE=stock`, `uncensored`, `fp8`, `uncensored-fp8`, `flash`, `flash-uncensored`, `flash-nvda` | `stock` | Qwen3.8 27B in NVFP4 (RadixArk's build, or edp1096's abliterated one), the same pair in FP8 (Qwen's own, or edp1096's abliterated one), or Qwen3.8 Flash-Next in one of three NVFP4 builds (RadixArk, dealignai's abliterated one, NVIDIA) (see the seven targets) |
 | Reduced draft vocabulary | `SPEC_TOKEN_MAP_SIZE=65536`, or `0` to serve without it | `65536` | flash only: hands the speculative draft the target's `lm_head` sliced to that many rows, which is 14 to 25% of decode and cannot change what the model may say |
 | Flash serving tier | `FLASH_TIER=context`, `concurrency`, `throughput` | **`concurrency`** since 2026-09-30 | flash only: 8 concurrent requests with 2 states per path (default; pool measured 477,056 tokens, so a full 262K prompt fits at 8 too, and opencode gets 205,000 tokens of context and 32,000 of output on it as on `context`), 4 requests so that long sessions queue less, or 24 without speculation |
 | Reasoning effort | `lean` (default), `xhigh`, `medium`, `low` | **`lean`** | the level this repo adds and defaults to: 74 words in the chat template that cost 0.71x the thinking tokens of `medium` on 364 public problems and 0.436x on 58 underspecified requests, with no measured quality cost. Qwen's three levels are left byte-identical. `LEAN_DEFAULT=0 ./install.sh` installs it without taking the default. Numbers, method and negative results in [LEAN.md](LEAN.md) |
 | Context mode (27B) | `CONTEXT_MODE=native` or `1m` | **`1m`** since v1.12.1 | 1,010,000 window via YaRN, mem-fraction 0.76, proxy required, limits fitted to the real pool at the end of the install (see the 1M section). The flash lane and `--no-service` are native either way, with no refusal, except `--no-service` on a box whose installed unit serves 1m: that is refused with both ways out, since it would leave the unit on configs it cannot start from (and a 64 GB DGX Spark refuses `--no-service` whatever the mode). A re-run keeps whatever is already installed, both directions |
 | systemd service | default, or `--no-service` | service | `--no-service`: foreground with `./run.sh`, no sudo, 27B native only; refused on a 64 GB DGX Spark, as `./run.sh` is |
-| Start now | default, or `--no-start` | starts | install and enable the engine and the proxy without starting them (`sudo systemctl start` later, as the installer prints); that path installs the other text lane too, and skips the smoke test, the fit of the 1M limits, the cockpit with its Agent view, and the image, video, Kolibri, both Nemotron, Flash FP4-Local and Ornith lanes |
+| Start now | default, or `--no-start` | starts | install and enable the engine and the proxy without starting them (`sudo systemctl start` later, as the installer prints); that path installs the other text lane too, and skips the smoke test, the fit of the 1M limits, the cockpit with its Agent view, and the image, video, Kolibri, both Nemotron, Qwen3.8 Flash-Next FP4-Local and Ornith lanes |
 | The other text lane | default, or `--no-flash` (on a 27B box), `--no-27b` (on a flash box) | beside the serving one, on demand: its units, built at its first Load | since v1.20: the same installer, started again for that lane, with its own target kept across updates; since v1.33 its image, checkpoint and draft (or vocabulary) come with its first Load. `--with-flash` / `--with-27b` install it whole now and prove it |
 | Image lane | default, or `--no-image` | on demand: its units, built at its first Load | Qwen-Image 2.1, 46 GB; `--with-image` installs it whole now and proves it |
 | Video lane | default, or `--no-video` | on demand: its units, built at its first Load | MiniMax-H3, about 174 GB of headroom; `--with-video` installs it whole now and proves it (about 23 min) |
 | Kolibri lane | default, or `--no-kolibri` | on demand: its units, built at its first Load | Aleph Alpha's Kolibri-1 on vLLM, 102 GB (79 checkpoint, 23 image); `--with-kolibri` installs it whole now and proves it (about 10 min) |
 | Nemotron lane | default, or `--no-nemotron` | on demand: its units, built at its first Load | NVIDIA's Nemotron 3.5 Bolt on vLLM, 51 GB (26 checkpoint and drafter, 25 image); `--with-nemotron` installs it whole now and proves it |
 | Nemotron Super lane | default, or `--no-nemotron-super` | on demand: its units, built at its first Load | NVIDIA's Nemotron 3.5 Super VL on vLLM, in the Nemotron lane's image: 77 GB of checkpoint and drafter, 102 with the image when the Nemotron lane is not there; `--with-nemotron-super` installs it whole now and proves it |
-| Flash FP4-Local lane | default, or `--no-flash-local` | on demand: its units, built at its first Load | NVIDIA's FP4-Local build of Qwen3.8-Flash-Next on vLLM, 121 GB (103 checkpoint, 18 image), 32 more for the copy of its n-gram table when the cache is on another disk. `--with-flash-local` installs it whole now and proves it |
-| Ornith 122B lane | default, or `--no-ornith-122b` | on demand: its units, built at its first Load | Ornith AI's Ornith 1.5 122B on vLLM, in the Flash FP4-Local lane's image: 78 GB of checkpoint, 96 with the image when the Flash FP4-Local lane is not there; `--with-ornith-122b` installs it whole now and proves it |
+| Qwen3.8 Flash-Next FP4-Local lane | default, or `--no-flash-local` | on demand: its units, built at its first Load | NVIDIA's FP4-Local build of Qwen3.8-Flash-Next on vLLM, 121 GB (103 checkpoint, 18 image), 32 more for the copy of its n-gram table when the cache is on another disk. `--with-flash-local` installs it whole now and proves it |
+| Ornith 122B lane | default, or `--no-ornith-122b` | on demand: its units, built at its first Load | Ornith AI's Ornith 1.5 122B on vLLM, in the Qwen3.8 Flash-Next FP4-Local lane's image: 78 GB of checkpoint, 96 with the image when the Qwen3.8 Flash-Next FP4-Local lane is not there; `--with-ornith-122b` installs it whole now and proves it |
 | opencode integration | default, or `--no-opencode` | on | on = ready config + `oc` launcher + default model following every switch; off = none of that, your own opencode config is never touched. `--with-opencode` turns it back on |
 | Ports | `PORT=`, `PROXY_PORT=` | 30000, 30001 | agent clients use the proxy port |
-| Storage | `HF_CACHE=`, `PLE_DIR=`, `FLASH_LOCAL_PLE_DIR=` | `~/.cache/huggingface`, `~/flashnext-ple`, `~/flash-local-ple` when the cache is on another disk | checkpoints, the 52 GB flash PLE backing file, and the copies of the Flash FP4-Local lane's n-gram table (32 GB, none with `none`, which reads it where the cache is), and each choice holds for the runs after |
+| Storage | `HF_CACHE=`, `PLE_DIR=`, `FLASH_LOCAL_PLE_DIR=` | `~/.cache/huggingface`, `~/flashnext-ple`, `~/flash-local-ple` when the cache is on another disk | checkpoints, the 52 GB flash PLE backing file, and the copies of the Qwen3.8 Flash-Next FP4-Local lane's n-gram table (32 GB, none with `none`, which reads it where the cache is), and each choice holds for the runs after |
 | Clone location | `DIR=` (one-liner only) | `~/dgx-spark-qwen38` | must be a clone of this repo on `main` |
 | Cockpit dashboard | default, or `--no-cockpit` | installed and enabled; bound to the tailnet address when the box has one, else loopback | installed by `install.sh` since v1.12, and its URL is the last thing the installer prints. `DASH_PORT=`/`DASH_BIND=` on `dashboard/install-dashboard.sh` change port and bind; a re-run keeps them. Installs a sudoers allowlist, see [the cockpit tour](docs/cockpit.md) |
 | Agent view (opencode in the cockpit) | default (the installer puts the pinned opencode in place when there is none, see [docs/opencode.md](docs/opencode.md)), or `--no-cockpit` | installed with the cockpit; relay on the tailnet address | skipped with a note when opencode is missing, which costs one view and never the install; `dashboard/install-agent.sh` with `AGENT_PORT=`, `AGENT_BIND=`, `OPENCODE_PORT=` to retune. opencode itself stays on loopback, see [the Agent view](docs/cockpit.md) |
@@ -272,14 +273,14 @@ Combinations that make sense:
 
 ```bash
 # one-liner forms (variables on the bash side, flags after "bash -s --")
-curl -fsSL https://get.alzeo.ai | bash                                  # 27B stock serving (1M), opencode, cockpit; every other lane prepared at its first Load
+curl -fsSL https://get.alzeo.ai | bash                                  # Qwen3.8 27B NVFP4 serving (1M), opencode, cockpit; every other lane prepared at its first Load
 curl -fsSL https://get.alzeo.ai | bash -s -- --all-weights              # the whole box now, every lane built and proved (about 763 GB of downloads, 930 of disk)
 curl -fsSL https://get.alzeo.ai | bash -s -- --no-flash --no-video --no-kolibri --no-nemotron --no-nemotron-super --no-flash-local --no-ornith-122b   # a smaller disk: the 27B and images only, on each run that passes them
 curl -fsSL https://get.alzeo.ai | CONTEXT_MODE=native bash              # the 262144 window instead
-curl -fsSL https://get.alzeo.ai | MODEL_CHOICE=flash bash               # Flash-Next lane (service only)
+curl -fsSL https://get.alzeo.ai | MODEL_CHOICE=flash bash               # Qwen3.8 Flash-Next lane (service only)
 curl -fsSL https://get.alzeo.ai | bash -s -- --no-opencode              # API only, no opencode files
 curl -fsSL https://get.alzeo.ai | bash -s -- --no-cockpit               # engine and proxy only, no web UI
-curl -fsSL https://get.alzeo.ai | MODEL_CHOICE=uncensored bash           # abliterated 27B, 1M context
+curl -fsSL https://get.alzeo.ai | MODEL_CHOICE=uncensored bash           # Qwen3.8 27B abliterated NVFP4, 1M context
 # clone forms
 ./install.sh --no-service && ./run.sh                    # no systemd, foreground, Ctrl+C stops it (128 GB box)
 CONTEXT_MODE=native ./install.sh                         # the 262144 window on a 1M box
@@ -314,6 +315,11 @@ v1.9 wins every row of the frozen battery against v1.2 except eval-style math (o
 | tool-eval-bench, 69 scenarios | **91/100** (Excellent), reproducible to the point across seeds |
 | Independent users on this config | **92-94/100** tool-calling ([forum thread](https://forums.developer.nvidia.com/t/380257)) |
 | Losslessness | token-identity study vs the pure model in BENCHMARKS.md ("The losslessness study") |
+
+On the engine it runs today (SGLang 0.5.22 without torch.compile, as v1.44.0 serves it), SGLang's own GSM8K
+(`sglang.test.run_eval`, 250 problems, the test set's 6th to 255th after the five it shows as examples, 8 at a time)
+gives **99.2%** (2026-11-05, BENCHMARKS.md). The table's GSM8K is the v1.2.1 study's, 200 problems on that release's
+engine: the two scores are not a before and after.
 
 And the flash lane (`flash`, the RadixArk export), measured on this box on 2026-09-18 at the
 `context` tier, every eval run against the serving surface this repo installs:
@@ -561,7 +567,7 @@ minutes to answer); from a terminal, `./prepare-lane.sh nemotron-super` the firs
 
 Every number, the builds tried and why this one: **[docs/nemotron-super-lane.md](docs/nemotron-super-lane.md)**.
 
-## Flash FP4-Local: NVIDIA's FP4 build of the flash model, on vLLM
+## Qwen3.8 Flash-Next FP4-Local: NVIDIA's FP4 build of the flash model, on vLLM
 
 Since v1.37 a plain install includes an eighth lane: [Qwen3.8-Flash-Next FP4-Local](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local),
 NVIDIA's own build of the flash model for one local GPU. Its experts are in NVFP4 and its other
@@ -576,11 +582,11 @@ request. It needs 121 GB, installed on demand like the others: `--with-flash-loc
 `--all-weights` does it at install, `--no-flash-local` leaves it out. Contributed by Dimitris
 Kontokostas ([#55](https://github.com/hasso5703/alzeo/pull/55)).
 
-On the cockpit's Lanes view, pick **Flash FP4-Local (NVIDIA)** and press **Load** (17 to 19 minutes to
+On the cockpit's Lanes view, pick **Qwen3.8 Flash-Next FP4-Local** and press **Load** (17 to 19 minutes to
 answer the first time, about 5 and a half after). From a terminal, `./prepare-lane.sh flash-local`
 the first time, then `./switch-model.sh flash-local`. Measured here, against the flash lane:
 
-| | flash (SGLang) | Flash FP4-Local |
+| | flash (SGLang) | Qwen3.8 Flash-Next FP4-Local |
 |---|---|---|
 | alone / 8 at a time, real text at the agents' sampling, both at `lean` | 43.8 / 123.7 tok/s | 47.4 / 106.6 tok/s |
 | GSM8K (1,314) / HumanEval (164) | 97.49 % / 96.95 % | 97.64 % / 98.17 % |
@@ -600,10 +606,10 @@ Since v1.38 a plain install includes a ninth lane: [Ornith 1.5 122B](https://hug
 Ornith AI's mixture of experts of the Qwen3.5 family, under the MIT licence: 122B parameters with 8
 of its 256 experts active per token, that reads text, images and video, calls tools and reasons (on by
 default, off on request), over a window of 1,048,576 tokens, its own 262,144 stretched four times
-with YaRN. Its authors' NVFP4 build runs on vLLM with NVIDIA's b12x kernels, in the Flash FP4-Local
+with YaRN. Its authors' NVFP4 build runs on vLLM with NVIDIA's b12x kernels, in the Qwen3.8 Flash-Next FP4-Local
 lane's image, its MTP head drafting 2 tokens, 8 requests at a time. It serves on the text port behind
 the same proxy and key, as model `ornith-1.5-122b`, OpenAI or Anthropic dialect alike, images and
-videos inside the request. It needs 78 GB beside the Flash FP4-Local lane (96 without it), installed on demand like
+videos inside the request. It needs 78 GB beside the Qwen3.8 Flash-Next FP4-Local lane (96 without it), installed on demand like
 the others: `--with-ornith-122b` or `--all-weights` does it at install, `--no-ornith-122b` leaves it out.
 
 On the cockpit's Lanes view, pick **Ornith 1.5 122B** and press **Load** (5 and a half minutes the first
@@ -646,7 +652,7 @@ re-run keeps the window the box chose, both directions. What it costs, the boot 
 the pool, the proxy guards it makes load-bearing, the 535,361-token field session, and how to go
 back: **[docs/context-1m.md](docs/context-1m.md)**.
 
-## The flash lane: Qwen3.8-Flash-Next 176B on one Spark
+## The flash lane: Qwen3.8 Flash-Next (176B) on one Spark
 
 Qwen's official validation environment for this model is a dual GB300 node and the public Spark
 recipes run it on two boxes. This lane runs it on **one**, at the model's full 262K window and
@@ -667,22 +673,25 @@ The same generated config is also the single source for **[pi](https://pi.dev)**
 
 ## The seven Qwen targets, and switching between them
 
-| choice | checkpoint | revision | engine, unit |
-|---|---|---|---|
-| `stock` (default) | `RadixArk/Qwen3.8-27B-NVFP4` | `52d1adc` | SGLang, `qwen38-sglang` |
-| `uncensored` | `edp1096/Huihui-RadixArk-Qwen3.8-27B-abliterated-NVFP4` | `21565d3` | SGLang, `qwen38-sglang` |
-| `fp8` | `Qwen/Qwen3.8-27B-FP8` | `017b9c7` | SGLang, `qwen38-sglang` |
-| `uncensored-fp8` | `edp1096/Huihui-Qwen3.8-27B-abliterated-FP8` | `603028a` | SGLang, `qwen38-sglang` |
-| `flash` | `RadixArk/Qwen3.8-Flash-Next-NVFP4` | `7b71922` | SGLang, `qwen38-flash` |
-| `flash-uncensored` | `dealignai/Qwen3.8-Flash-Next-ABLITERATED-NVFP4` | `be794b9` | SGLang, `qwen38-flash` |
-| `flash-nvda` | `nvidia/Qwen3.8-Flash-Next-NVFP4` | `fc694b5` | SGLang, `qwen38-flash` |
+| choice | version, as the cockpit names it | checkpoint | revision | engine, unit |
+|---|---|---|---|---|
+| `stock` (default) | Qwen3.8 27B NVFP4 · RadixArk | `RadixArk/Qwen3.8-27B-NVFP4` | `52d1adc` | SGLang 0.5.22, `qwen38-sglang` |
+| `uncensored` | Qwen3.8 27B abliterated NVFP4 · edp1096 | `edp1096/Huihui-RadixArk-Qwen3.8-27B-abliterated-NVFP4` | `21565d3` | SGLang 0.5.22, `qwen38-sglang` |
+| `fp8` | Qwen3.8 27B FP8 · Qwen | `Qwen/Qwen3.8-27B-FP8` | `017b9c7` | SGLang 0.5.22, `qwen38-sglang` |
+| `uncensored-fp8` | Qwen3.8 27B abliterated FP8 · edp1096 | `edp1096/Huihui-Qwen3.8-27B-abliterated-FP8` | `603028a` | SGLang 0.5.22, `qwen38-sglang` |
+| `flash` | Qwen3.8 Flash-Next NVFP4 · RadixArk | `RadixArk/Qwen3.8-Flash-Next-NVFP4` | `7b71922` | SGLang nightly 53295c6, `qwen38-flash` |
+| `flash-uncensored` | Qwen3.8 Flash-Next abliterated NVFP4 · dealignai | `dealignai/Qwen3.8-Flash-Next-ABLITERATED-NVFP4` | `be794b9` | SGLang nightly 53295c6, `qwen38-flash` |
+| `flash-nvda` | Qwen3.8 Flash-Next NVFP4 · NVIDIA | `nvidia/Qwen3.8-Flash-Next-NVFP4` | `fc694b5` | SGLang nightly 53295c6, `qwen38-flash` |
+
+The ids in the first column are what `MODEL_CHOICE`, `./switch-model.sh` and the cockpit's API take; they did not change
+when the cockpit took the official names (v1.45.0).
 
 `./switch-model.sh` also takes `image`, `image-turbo`, `video`, `kolibri`, `kolibri-nvfp4`, `nemotron`, `nemotron-super`, `flash-local` and `ornith-122b`: each lane's section above says what it serves.
 
 `flash-uncensored` is the abliterated build of the tree this lane already
 serves, and it was chosen on evidence rather than on downloads: of the
 abliterated Flash-Next exports published for this architecture, this one has
-**206 shards with the same names as the stock export and 205 of them
+**206 shards with the same names as RadixArk's export and 205 of them
 byte-identical in size**, the same index, the same `hf_quant_config` and the same
 chat template. It is an abliteration OF what this lane serves, so every serving
 flag transfers unchanged, MTP and the vision tower included. Validated here:
@@ -737,11 +746,11 @@ holding 74 GB of the 124). Both downloaders now answer that one refusal by
 retrying the repo that hit it with Xet, then turning Xet back off, so this
 target installs with the same command as the other six.
 
-The uncensored target is huihui-ai's abliteration of Qwen3.8-27B re-quantized
-with the identical RadixArk modelopt NVFP4 recipe (verified: same
+The `uncensored` target, Qwen3.8 27B abliterated NVFP4 · edp1096, is huihui-ai's abliteration of Qwen3.8 27B
+re-quantized with the identical RadixArk modelopt NVFP4 recipe (verified: same
 `text_config`, same mixed 8-bit attention / 4-bit MLP quant groups, same
 chat template, MTP + vision intact, ~22 GB). It refuses the least while keeping
-the stock NVFP4 serving path.
+the serving path of RadixArk's NVFP4 build.
 
 **NVIDIA published its own 27B NVFP4 export on 2026-09-08**
 ([`nvidia/Qwen3.8-27B-NVFP4`](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4)), and it
@@ -803,7 +812,7 @@ native context, or watch host `MemAvailable` if you run it at 1M.
 The flash target is Qwen3.8-Flash-Next (Qwen4-generation preview: 176B hybrid
 MoE, 6B active, QSA sparse attention, multimodal) in RadixArk's NVFP4, served
 by SGLang with the model's own NEXTN/MTP speculative head and a working radix
-(prefix) cache. The five text units publish the same port and are never enabled
+(prefix) cache. The seven text units publish the same port and are never enabled
 together: switching targets flips which unit starts at boot, the API surface
 and the keepalive proxy stay put.
 
@@ -884,7 +893,7 @@ systemctl status qwen38-keepalive       # keepalive proxy state
 systemctl status qwen38-dashboard       # cockpit state, if you installed it
 python3 conc-check.py                   # does this lane still answer correctly at concurrency 8
 python3 systemone-check.py              # /v1/systemone: every shape, every refusal, mixed with ordinary chat
-sudo systemctl restart qwen38-sglang    # 27B: ~5-7 min boot; the radix (prefix) cache starts empty
+sudo systemctl restart qwen38-sglang    # 27B: ~3.5-6.5 min boot (7-8 for its FP8 and abliterated versions); the radix (prefix) cache starts empty
 sudo systemctl restart qwen38-flash     # flash: ~12-15 min boot (weight load, and the PLE table written from scratch)
 journalctl -u qwen38-sglang -f          # server logs (or the unit of the lane that serves)
 journalctl -u qwen38-keepalive -f       # one line per proxied request (bytes, first/last event, outcome)
@@ -903,7 +912,7 @@ extras, and what an upgrade from an earlier version actually does:
 ## The cockpit (installed by default)
 
 A local dashboard for this stack: what is served right now, whether it is healthy for real, and
-the handful of actions you would otherwise type by hand. Single-file stdlib backend, no pip and no
+the handful of actions you would otherwise type by hand. A stdlib backend (cockpit.py and six modules beside it), no pip and no
 venv. Since v1.12 `install.sh` installs it as step 10/10, once the engine has answered a real
 generation, and prints its URL as the last thing it says:
 
@@ -927,12 +936,12 @@ question you had when you opened the page.
 
 | View | What it answers | What you can do there |
 |---|---|---|
-| **Now** | Is the box serving, and on what? The pool of unified memory and what holds it, the nine lanes, activity, the last events | Load a lane from the rack; the Engine actions button at the top, on every view, runs a smoke generation, flushes the prefix cache, aborts every generation, writes a diagnostics bundle and fits opencode's limits |
+| **Now** | Is the box serving, and on what? The pool of unified memory and what holds it, the nine lanes with each one's engine and its version, activity (how far a long prompt has got), the last events | Load a lane from the rack; the Engine actions button at the top, on every view, runs a smoke generation, flushes the prefix cache, aborts every generation, writes a diagnostics bundle and fits opencode's limits |
 | **Agent** | opencode's own web interface, framed behind this login | Run a session on the box from a laptop or a phone, no terminal |
-| **Lanes** | Which lanes exist, which one serves, what the probes and containers say, the engine's facts and the proxy | Act on any lane this repo installed: Load runs the switch-stop-start journey in one path |
+| **Lanes** | Which lanes exist, which one serves, each one's versions by their official names and its engine with its version, what the probes and containers say, the engine's facts and the proxy | Act on any lane this repo installed: Load runs the switch-stop-start journey in one path |
 | **Traffic** | What the engine and the proxy each did with the same traffic: live feed, abandoned-request guard, pool and decode, and the last 5 minutes from the engine's own counters (prompt tokens from the cache, decode speed, first token, tokens per second) | Read a dead decode from both sides of the wire |
 | **Machine** | Unified memory, the GB10, the CPU, and whether the safety belts are holding | Watch the memory edge this hardware actually has |
-| **Library** | Every target as data: recipes, drift against what is running, registry of what is on disk, upstream watch, full inventory | Read what is installed and what it costs in bytes; rescan (the panels are read-only: `./uninstall.sh --list` shows the same inventory, and `./uninstall.sh` prints the reclaim commands) |
+| **Library** | Every target as data: recipes and the engine each runs, drift against what is running, registry of what is on disk, upstream watch, full inventory | Read what is installed and what it costs in bytes; rescan, download a target's checkpoint, delete the stray revisions (`./uninstall.sh --list` shows the same inventory, and `./uninstall.sh` prints the reclaim commands) |
 | **Decide** | The typed-decisions endpoint, from a browser: is it served, and what does it answer? | Ask the lane with prefilled examples, copy the matching curl, read the probabilities |
 | **Image** | Qwen-Image 2.1, when it is the serving lane: generation, editing with up to ten references, native RGBA | Generate and edit at the model's defaults (**Reset**), start from the sample prompts, follow each stage of a request, copy the matching curl |
 | **Video** | MiniMax-H3, when it is the serving lane: text to video with joint video-and-audio, first/last-frame conditioning | Generate at the cookbook's defaults (**Reset**), follow the request to completed, play and download the MP4, copy the matching curl |
@@ -945,7 +954,7 @@ phone, and the Agent view that runs opencode in the browser behind this same log
 
 ## Credits
 
-All the heavy lifting belongs to the [SGLang](https://github.com/sgl-project/sglang) team (day-0 Qwen3.8 support, the DSPARK and DFLASH implementations, the `lmsysorg/sglang:qwen38-27b` image), [z-lab / Inco AI](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) for the DFlash2 drafter, [maurienne-ai](https://huggingface.co/maurienne-ai/Qwen3.8-27B-DFlash2-NVFP4-RTNcal) for its calibrated NVFP4 build of that draft (what the 27B lane serves since v1.9), [MiaAI-Lab](https://github.com/MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark) for the quantized-lm_head fix that makes DFlash2 safe on GB10, [r0b0tlab](https://github.com/r0b0tlab/qwen38-27b-nvfp4-sm121-sglang) for the draft-block sweep, [RadixArk](https://huggingface.co/RadixArk) for the NVFP4 + DSpark checkpoints, [DeepSeek](https://arxiv.org/abs/2607.05147) for the DSpark method, [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) for the model, [Unsloth](https://unsloth.ai/docs/models/qwen3.8) for their guides, [vLLM](https://github.com/vllm-project/vllm) for the engine of the Kolibri, Nemotron, Flash FP4-Local and Ornith lanes, [eugr](https://hub.docker.com/r/eugr/spark-vllm-b12x) for the b12x vLLM image the last two serve, Aleph Alpha for [Kolibri-1](https://huggingface.co/Aleph-Alpha/Kolibri-1) and [its serving plugin](https://github.com/Aleph-Alpha/aleph-alpha-inference), [Quantinine](https://huggingface.co/Quantinine/Kolibri-1-NVFP4A16-FP8) for its NVFP4 build, NVIDIA for Nemotron 3.5 Bolt and Super VL, their LiLiCorr drafters, b12x and the Flash-Next NVFP4 export, Ornith AI for [Ornith 1.5 122B](https://huggingface.co/ornith-ai/Ornith-1.5-122B-NVFP4), MiniMax for MiniMax-H3 and larryvrh for its Turbo LoRA, Qwen for Qwen-Image 2.1 and Qwen3-ASR, the Kokoro-82M authors, opencode, and huihui-ai, edp1096 and dealignai for the abliterated exports. This repo just packages a validated, hardened configuration of their work for GB10 machines. The SGLang cookbook's DGX Spark cell was marked "not yet validated" at the time; consider this an independent field validation (2026-08-15). On 2026-08-21 the cookbook made DFlash2 the official recipe for this model (same algorithm, same draft block 8; its `incoai/Qwen3.8-27B-DFlash2` draft path is byte-identical to the z-lab checkpoint this repo served until v1.9), with the DGX Spark cell marked "Final Verification In Progress": this repo's validation data is submitted upstream in [sgl-project/sglang#35860](https://github.com/sgl-project/sglang/issues/35860).
+All the heavy lifting belongs to the [SGLang](https://github.com/sgl-project/sglang) team (day-0 Qwen3.8 support, the DSPARK and DFLASH implementations, the `lmsysorg/sglang:qwen38-27b` image), [z-lab / Inco AI](https://huggingface.co/z-lab/Qwen3.8-27B-DFlash2) for the DFlash2 drafter, [maurienne-ai](https://huggingface.co/maurienne-ai/Qwen3.8-27B-DFlash2-NVFP4-RTNcal) for its calibrated NVFP4 build of that draft (what the 27B lane serves since v1.9), [MiaAI-Lab](https://github.com/MiaAI-Lab/Qwen3.8-27B-SGLang-DGX-Spark) for the quantized-lm_head fix that makes DFlash2 safe on GB10, [r0b0tlab](https://github.com/r0b0tlab/qwen38-27b-nvfp4-sm121-sglang) for the draft-block sweep, [RadixArk](https://huggingface.co/RadixArk) for the NVFP4 + DSpark checkpoints, [DeepSeek](https://arxiv.org/abs/2607.05147) for the DSpark method, [Qwen](https://huggingface.co/Qwen/Qwen3.8-27B) for the model, [Unsloth](https://unsloth.ai/docs/models/qwen3.8) for their guides, [vLLM](https://github.com/vllm-project/vllm) for the engine of the Kolibri, Nemotron, Qwen3.8 Flash-Next FP4-Local and Ornith lanes, [eugr](https://hub.docker.com/r/eugr/spark-vllm-b12x) for the b12x vLLM image the last two serve, Aleph Alpha for [Kolibri-1](https://huggingface.co/Aleph-Alpha/Kolibri-1) and [its serving plugin](https://github.com/Aleph-Alpha/aleph-alpha-inference), [Quantinine](https://huggingface.co/Quantinine/Kolibri-1-NVFP4A16-FP8) for its NVFP4 build, NVIDIA for Nemotron 3.5 Bolt and Super VL, their LiLiCorr drafters, b12x and the Flash-Next NVFP4 export, Ornith AI for [Ornith 1.5 122B](https://huggingface.co/ornith-ai/Ornith-1.5-122B-NVFP4), MiniMax for MiniMax-H3 and larryvrh for its Turbo LoRA, Qwen for Qwen-Image 2.1 and Qwen3-ASR, the Kokoro-82M authors, opencode, and huihui-ai, edp1096 and dealignai for the abliterated exports. This repo just packages a validated, hardened configuration of their work for GB10 machines. The SGLang cookbook's DGX Spark cell was marked "not yet validated" at the time; consider this an independent field validation (2026-08-15). On 2026-08-21 the cookbook made DFlash2 the official recipe for this model (same algorithm, same draft block 8; its `incoai/Qwen3.8-27B-DFlash2` draft path is byte-identical to the z-lab checkpoint this repo served until v1.9), with the DGX Spark cell marked "Final Verification In Progress": this repo's validation data is submitted upstream in [sgl-project/sglang#35860](https://github.com/sgl-project/sglang/issues/35860).
 
 ## License
 

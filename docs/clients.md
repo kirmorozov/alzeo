@@ -4,6 +4,10 @@ The stack serves two dialects through one hardened entry point. This page
 says which, what each client must send, and what is measured on the
 reference box versus what is merely how a client is configured.
 
+The address to give a client, the model that serves and where the key is are in
+the cockpit's Now view, ready to copy ("Connect a client", since v1.45.1), with
+the box's other addresses when the cockpit is opened on the box itself.
+
 ## The surface
 
 Agent clients should connect to the **keepalive proxy** (default
@@ -95,7 +99,7 @@ A client of a listed key never names the engine's request id (proxy v6.51): its
 its body. Bodies are JSON in UTF-8: another encoding gets a 415.
 
 Served model names: `qwen3.8-27b` (27B lane, both context modes),
-`qwen3.8-flash-next` (flash lane), `qwen3.8-flash-next-fp4` (Flash FP4-Local lane),
+`qwen3.8-flash-next` (flash lane), `qwen3.8-flash-next-fp4` (Qwen3.8 Flash-Next FP4-Local lane),
 `kolibri-1` (Kolibri lane), `nemotron-3.5-bolt` (Nemotron lane), `nemotron-3.5-super-vl`
 (Nemotron Super lane) and `ornith-1.5-122b` (Ornith lane). Send the name, not the checkpoint path. A client set up for one lane
 keeps working on another: SGLang answers any name, and on the vLLM lanes, whose vLLM
@@ -109,12 +113,12 @@ its own (`low`, `medium`, `high`, which its template defaults to, and `none`, in
 `chat_template_kwargs.reasoning_effort` or the top-level `reasoning_effort`), and it
 has no vision. `/v1/systemone` needs one of the SGLang Qwen lanes and says so there.
 
-The Flash FP4-Local lane (vLLM, [docs/flash-local-lane.md](flash-local-lane.md)) serves the flash
+The Qwen3.8 Flash-Next FP4-Local lane (vLLM, [docs/flash-local-lane.md](flash-local-lane.md)) serves the flash
 model with the flash lane's chat template, so a client sees the Qwen levels below, `lean`, `low`,
 `medium` and `xhigh`, with one difference: a request that names no level gets `xhigh`, its model
 card's default. `none` turns the reasoning off there too (the proxy says it in the template's words,
 v6.43). Its reasoning comes in the `reasoning` field (vLLM's name), it reads images sent inside the
-request (a data URL) and fetches no URL, and its window is 262,144 tokens. `/v1/systemone` is not
+request (a data URL) and fetches no URL, and its window is 262,144 tokens (1,048,576 with `FLASH_LOCAL_CONTEXT=1m`, docs/flash-local-lane.md). `/v1/systemone` is not
 served on it: the endpoint says which lanes serve it.
 
 The Nemotron lanes (vLLM, [docs/nemotron-lane.md](nemotron-lane.md) and
@@ -145,11 +149,12 @@ lane cannot serve comes back refused rather than silently cut. The proxy
 refuses a prompt past 92% of the lane's KV pool (`OVERSIZE_MARGIN_FRAC`, 0.08)
 with a 400 `context_too_long` (`code: context_length_exceeded`, the code
 opencode compacts on), whose message names the count, the limit and the pool;
-while the flash lane serves, the limit is also held under its one-prompt
+while a flash lane serves at its 262K window (Flash-Next, or FP4-Local without its 1M option), the limit is also held under its one-prompt
 ceiling (`FLASH_PROMPT_CEILING_TOKENS`, 250,000 by default), which keeps a long
 flash prefill off the memory edge. The engine itself refuses a request whose
-prompt plus `max_tokens` passes its window (262,144 tokens, 1,010,000 in 1M
-mode). A 413 means a body over `MAX_BODY_BYTES` (256 MiB), refused before a
+prompt plus `max_tokens` passes its window (262,144 tokens on most lanes;
+1,010,000 on the 27B in 1M mode; 1,048,576 on Super VL, Ornith, and FP4-Local
+with its 1M option). A 413 means a body over `MAX_BODY_BYTES` (256 MiB), refused before a
 byte of it is read.
 
 The network's share of the port is bounded (proxy v6.41). Another machine holds
@@ -195,7 +200,7 @@ below (`0` turns a ceiling off).
   its pool, its window and the proxy's ceiling:
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is opencode's context plus 23,000, so Claude
   Code's longest prompt is opencode's context, and `max_tokens` is opencode's
-  answer budget (228,000 and 32,000 on Flash FP4-Local, 578,000 and 185,000 on
+  answer budget (228,000 and 32,000 on Qwen3.8 Flash-Next FP4-Local, 578,000 and 185,000 on
   the 27B in its 1M mode). opencode may reach one worst step past its context,
   and that step is the margin left for what Claude Code adds to a prompt and
   only estimates. A lane opencode has no limits for gets 205,000 and 32,000,
@@ -270,10 +275,11 @@ below (`0` turns a ceiling off).
   sent it again without a stream, which it gave up on after about 6 minutes:
   a long answer never came, and the proxy's hold during a restart could not
   keep such a request alive (measured on the reference box, 2026-10-02);
-  `700000` lets a session grow past the window. On the flash lane: `205000`
-  with `CLAUDE_CODE_EXTRA_BODY='{"max_tokens":32000}'`, the limits opencode uses
-  there; a launcher can pick the pair by the lane that serves
-  (`systemctl is-active --quiet qwen38-flash.service`).
+  `700000` lets a session grow past the window. On the flash lane: `228000`
+  (opencode's 205,000 plus the 23,000 Claude Code keeps below its setting) with
+  `CLAUDE_CODE_EXTRA_BODY='{"max_tokens":32000}'`, so that Claude Code's prompts stop where opencode's do there.
+  `claude-local` already takes the pair of the lane that serves from that lane's opencode limits (above); a
+  launcher of your own can do the same.
 
   The idle-timeout variables are the difference between "hangs" and "slow";
   they are named in issue #2 and in the failure family diagnosed in

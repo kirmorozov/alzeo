@@ -37,6 +37,7 @@ from collections import deque
 
 import agent_relay as ar
 import engine_metrics as em
+import engines as en
 import lifecycle as lc
 import registry as rg
 import recipes as rp
@@ -270,9 +271,11 @@ def job_phrase(action: str, params: dict) -> str:
 # now restarts this unit, but a plain `git pull` does not, so the process watches
 # its own sources and says so instead of lying quietly.
 # The page is several scripts since the rebuild (2026-09-29): every one of them counts,
-# found on disk rather than listed, so a script added later is watched too.
+# found on disk rather than listed, so a script added later is watched too. Each module of its own
+# this file imports is in it: engine_metrics.py was not, and a change to it alone left the old code
+# running unsaid (found adding engines.py, 2026-11-08).
 CODE_FILES = ("cockpit.py", "recipes.py", "lifecycle.py", "registry.py",
-              "agent_relay.py", "static/index.html") + tuple(
+              "agent_relay.py", "engine_metrics.py", "engines.py", "static/index.html") + tuple(
     "static/js/" + p.name for p in sorted((HERE / "static" / "js").glob("*.js")))
 
 
@@ -741,13 +744,13 @@ NEMOTRON_UNIT = "qwen38-nemotron.service"
 NEMOTRON_UNIT_PATH = Path("/etc/systemd/system/qwen38-nemotron.service")
 NEMOTRON_SUPER_UNIT = "qwen38-nemotron-super.service"
 NEMOTRON_SUPER_UNIT_PATH = Path("/etc/systemd/system/qwen38-nemotron-super.service")
-# The Flash FP4-Local lane (v1.37) runs vLLM with b12x too, NVIDIA's FP4 build of the flash model
+# The Qwen3.8 Flash-Next FP4-Local lane (v1.37) runs vLLM with b12x too, NVIDIA's FP4 build of the flash model
 # on the community image its model card names: the same routes, the same /metrics, the same engine
 # panel, an MTP head counted as a drafter is. It is the family's third lane, in the same table: its
 # boot alone reads otherwise (lifecycle.parse_flash_local_boot_log), and its name in a sentence.
 FLASH_LOCAL_UNIT = "qwen38-flash-local.service"
 FLASH_LOCAL_UNIT_PATH = Path("/etc/systemd/system/qwen38-flash-local.service")
-# The Ornith 1.5 122B lane (v1.38) runs on the Flash FP4-Local lane's image, read by the same b12x
+# The Ornith 1.5 122B lane (v1.38) runs on the Qwen3.8 Flash-Next FP4-Local lane's image, read by the same b12x
 # loader, with an MTP head: the family's fourth lane, its boot read as FP4-Local's is (the same
 # loader's lines, measured on the reference box, 2026-10-21), its name in a sentence its own.
 ORNITH_UNIT = "qwen38-ornith-122b.service"
@@ -762,7 +765,7 @@ NEMOTRON_LANES = {NEMOTRON_UNIT: ("qwen38-nemotron", "nemotron", "nemotron-3.5-b
                   ORNITH_UNIT: ("qwen38-ornith-122b", "ornith-122b", "ornith-1.5-122b", "nvfp4")}
 # the lane in a sentence, and what its engine drafts with
 B12X_LANE_NAME = {NEMOTRON_UNIT: "the Nemotron lane", NEMOTRON_SUPER_UNIT: "the Nemotron lane",
-                  FLASH_LOCAL_UNIT: "the Flash FP4-Local lane", ORNITH_UNIT: "the Ornith lane"}
+                  FLASH_LOCAL_UNIT: "the Qwen3.8 Flash-Next FP4-Local lane", ORNITH_UNIT: "the Ornith lane"}
 B12X_SPEC = {NEMOTRON_UNIT: "LiLiCorr (DFlash)", NEMOTRON_SUPER_UNIT: "LiLiCorr (DFlash)", FLASH_LOCAL_UNIT: "MTP",
              ORNITH_UNIT: "MTP"}
 NEMOTRON_READY_ENTER: dict = {}
@@ -794,11 +797,11 @@ NEMOTRON_CANNOT = {
     "abort_all": "The Nemotron lane has no route that aborts its generations: stopping the lane stops them.",
     "fit_opencode": "Nemotron's opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.",
 }
-# the same three on the Flash FP4-Local lane, in its own name
+# the same three on the Qwen3.8 Flash-Next FP4-Local lane, in its own name
 FLASH_LOCAL_CANNOT = {
-    "flush_cache": "The Flash FP4-Local lane has no cache flush route: vLLM evicts its prefix cache by itself.",
-    "abort_all": "The Flash FP4-Local lane has no route that aborts its generations: stopping the lane stops them.",
-    "fit_opencode": "The Flash FP4-Local lane's opencode limits are its own, set when it is loaded: its window decides them, not its pool.",
+    "flush_cache": "The Qwen3.8 Flash-Next FP4-Local lane has no cache flush route: vLLM evicts its prefix cache by itself.",
+    "abort_all": "The Qwen3.8 Flash-Next FP4-Local lane has no route that aborts its generations: stopping the lane stops them.",
+    "fit_opencode": "The Qwen3.8 Flash-Next FP4-Local lane's opencode limits are its own, set when it is loaded: its window decides them, not its pool.",
 }
 # and on the Ornith lane, in its own name
 ORNITH_CANNOT = {
@@ -1125,7 +1128,7 @@ def collect_engine_info():
             served_target = VAR2TARGET[var]
             break
     # the one-prompt ceiling the proxy applies to the model that serves (proxy_prompt_ceiling)
-    ceiling = proxy_prompt_ceiling(slim.get("served_model_name"))
+    ceiling = proxy_prompt_ceiling(slim.get("served_model_name"), int(slim.get("context_length") or 0))
     return {"node_id": "local", "info": slim, "prompt_ceiling_tokens": ceiling,
             "served_target": served_target}
 
@@ -1201,17 +1204,17 @@ def nemotron_engine_info(models: list | None = None):
     # the one-prompt ceiling the proxy applies to it, read as for the SGLang lanes: the Flash
     # FP4-Local lane gets the flash lane's (proxy v6.43), and 0 read there instead said that no
     # ceiling held while the proxy refused prompts past 250,000 (found in review, 2026-10-19)
-    return {"node_id": "local", "info": slim, "prompt_ceiling_tokens": proxy_prompt_ceiling(slim.get("served_model_name")),
+    return {"node_id": "local", "info": slim, "prompt_ceiling_tokens": proxy_prompt_ceiling(slim.get("served_model_name"), int(slim.get("context_length") or 0)),
             "served_target": target}
 
 
-def proxy_prompt_ceiling(served) -> int:
+def proxy_prompt_ceiling(served, window: int = 0) -> int:
     """The one-prompt ceiling the proxy applies to the model that serves, as deployed in the
     keepalive unit (0 = pool share only): the fit tool's own reading of it, so the two cannot
     disagree (the flash lane's ceiling follows that lane since proxy v6.25)."""
     env = run(["systemctl", "show", "qwen38-keepalive.service", "-p", "Environment"], timeout=5)
     try:
-        return _oc_fit().ceiling_from_env(env or "", served)
+        return _oc_fit().ceiling_from_env(env or "", served, window)
     except Exception:  # noqa: BLE001 (a missing fit tool must not darken the panel)
         m = re.search(r"(?<![A-Z_])PROMPT_CEILING_TOKENS=(\d+)", env or "")
         return int(m.group(1)) if m else 0
@@ -3050,7 +3053,7 @@ def lane_startable(lane: str):
     # read-only too (:ro), as the engines have it since 2026-10-18
     tmpl = re.search(r"--chat-template\s+[\"']?/out/([^\s\"']+)", text)
     out = re.search(r"-v\s+[\"']?([^ :\"']+)[\"']?:/out(?=[:\"'\s]|$)", text, re.M)
-    # or the template mounted on its own, as the Flash FP4-Local lane mounts it (--mount): read by the
+    # or the template mounted on its own, as the Qwen3.8 Flash-Next FP4-Local lane mounts it (--mount): read by the
     # directory's mount only, its check was passed by (found in review, 2026-10-20)
     alone = tmpl and re.search(r"--mount\s+type=bind,source=([^,\s]+),target=/out/" + re.escape(tmpl.group(1))
                                + r"(?=[,\s])", text)
@@ -3116,6 +3119,83 @@ def collect_lanes_startable():
     """30 s tier: which side lanes can start as installed (their Start), lane_startable."""
     return {lane: lane_startable(lane) for lane in ("image", "video", "kolibri", "nemotron", "nemotron-super", "flash-local", "ornith-122b", "flash", "27b")}
 
+
+def engine_table() -> dict:
+    """engines.py's table for the page, each unit saying whether the unit file its installer wrote starts the image
+    its installer pins (pinned: True or False, None when the cockpit cannot tell: no unit file, a diffusion lane's
+    wheel, engine-inputs.py unreadable). A lane installed on an image of the operator's is not given the pin's version
+    (decision 1178: the installed image's; code review of v1.45.0)."""
+    table = en.page_table()
+    try:
+        ei = _engine_inputs()
+    except Exception:  # noqa: BLE001
+        return table
+    hf = str(Path.home() / ".cache/huggingface")
+    for unit, row in table.items():
+        path = UNIT_DIR / unit
+        row["window"] = None
+        if "@sha256:" not in row["pin"] or not path.is_file():    # a wheel, or no unit: nothing to read
+            row["pinned"] = None
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            row["pinned"] = None
+            continue
+        # the window the unit starts its engine with (FLASH_LOCAL_CONTEXT=1m, discussion #63), where the unit says it
+        m = re.search(r"--(?:max-model-len|context-length) (\d+)", text)
+        row["window"] = int(m.group(1)) if m else None
+        try:
+            row["pinned"] = en.runs_pin(unit, ei.inputs(str(path), str(CONFIG_DIR), hf, [], text=text)[1])
+        except Exception:  # noqa: BLE001
+            row["pinned"] = None
+    return table
+
+
+def collect_api() -> dict:
+    """Where a client sends its requests: the keepalive proxy's port, the interface it listens on, whether it speaks
+    TLS and whether it takes keys of its own, read from its unit as systemd runs it (Hasan, 2026-10-18: the address
+    to give a client, plain and in sight, for whoever reads nothing else). Only these four are taken from the unit,
+    whose environment holds keys: nothing else of it leaves this function. The host is the page's to add, the address
+    the browser reached the cockpit by, the one that works from there."""
+    show = run(["systemctl", "show", "qwen38-keepalive.service", "-p", "ExecStart", "-p", "Environment",
+                "-p", "EnvironmentFiles"], timeout=5) or ""
+    port = re.search(r"keepalive-proxy\.py (\d+)", show)
+    names = r"(?<![A-Za-z0-9_])(PROXY_BIND|QWEN38_TLS_CERT|QWEN38_CLIENT_KEYS_FILE)="
+    env = dict(re.findall(names + r"(\S*)", show))
+    # and the files the unit reads its environment from, which systemctl show does not unfold: the docs put the
+    # proxy's secrets there, a certificate or client keys among them (review of v1.45.1). The three names only; a file
+    # this user cannot read is said, as what it sets is then unknown
+    unread = False
+    for path, optional in re.findall(r"^EnvironmentFiles=(\S+)(?: \(ignore_errors=(yes|no)\))?", show, re.M):
+        try:
+            text = Path(path).read_text(errors="replace")
+        except OSError:
+            unread = unread or optional != "yes"
+            continue
+        for k, v in re.findall(r"^\s*(?:export\s+)?" + names + r"[\"']?([^\"'\s#]*)", text, re.M):
+            env[k] = v
+    # the box's addresses another machine can reach it by, the tailnet's first: the page opened on the box itself
+    # (127.0.0.1) has no other to offer (captures of 2026-11-09). Container bridges are no one's way in
+    addrs = []
+    for line in (run(["ip", "-4", "-o", "addr", "show", "scope", "global"], timeout=5) or "").splitlines():
+        f = line.split()
+        if len(f) >= 4 and f[2] == "inet" and not f[1].startswith(("docker", "br-", "veth", "virbr", "cni", "flannel")):
+            addrs.append({"iface": f[1], "addr": f[3].split("/")[0]})
+    addrs.sort(key=lambda a: not a["iface"].startswith("tailscale"))
+    return {"node_id": "local", "known": bool(port), "port": int(port.group(1)) if port else 30001,
+            "bind": env.get("PROXY_BIND") or "0.0.0.0", "tls": bool(env.get("QWEN38_TLS_CERT")),
+            "client_keys": bool(env.get("QWEN38_CLIENT_KEYS_FILE")), "key_file": str(CONFIG_DIR / "api-key"),
+            "env_unread": unread, "addresses": addrs}
+
+
+def collect_engine_table() -> dict:
+    """Each lane's engine and its version, named the same way everywhere on the page (decision 1178): engine_table()
+    every 30 s, the first time at the cockpit's start. Read once into the page's config, an install-<lane>.sh run
+    alone afterwards (no restart of the cockpit) changed what a unit starts unsaid (code review of v1.45.0)."""
+    return {"node_id": "local", "table": engine_table()}
+
+
 TIERS = [
     (1.0, {"machine": collect_machine, "engine_fast": collect_engine_fast, "job": collect_jobs}),
     (2.0, {"lifecycle": collect_lifecycle}),
@@ -3128,7 +3208,9 @@ TIERS = [
     (5.0, {"metrics": collect_engine_metrics}),
     # the other box of a pair (decision 975), its own thread too: a box that went holds its read 8 s
     (5.0, {"pair": collect_pair}),
-    (30.0, {"engine_info": collect_engine_info, "repo": collect_repo, "kernel": collect_kernel,
+    (30.0, {"engine_info": collect_engine_info, "engine_table": collect_engine_table, "api": collect_api,
+            "repo": collect_repo,
+            "kernel": collect_kernel,
             "lanes_ready": collect_lanes_ready, "lanes_startable": collect_lanes_startable,
             "opencode": collect_opencode, "reqguard": collect_guard,
             "update": collect_update}),
@@ -3641,7 +3723,7 @@ def systemone_available(max_age: float = 60.0) -> dict:
     if text is None and states.get(FLASH_LOCAL_UNIT) in lc.BUSY_STATES:
         # the proxy refuses it on every vLLM lane (v6.43), this Qwen one included
         return {"available": False, "lane": "", "status": None,
-                "reason": f"the Flash FP4-Local lane is serving: System One is answered by {who}, "
+                "reason": f"the Qwen3.8 Flash-Next FP4-Local lane is serving: System One is answered by {who}, "
                           f"on SGLang, so load {one}"}
     if text is None and states.get(ORNITH_UNIT) in lc.BUSY_STATES:
         # the same refusal (v6.43), before the family's rule below names it a Nemotron lane

@@ -65,11 +65,11 @@ eval "$nline"
 # The Nemotron Super lane's: the model and its drafter (its image is the Nemotron lane's, checked above).
 sline="$(grep -E '^NEMOTRON_SUPER_(REPO|REV|DRAFT_REPO|DRAFT_REV)=' "$REPO_DIR/install-nemotron-super.sh")"
 eval "$sline"
-# The Flash FP4-Local lane's: NVIDIA's checkpoint, its DFlash2 drafter, which its lane loads when
+# The Qwen3.8 Flash-Next FP4-Local lane's: NVIDIA's checkpoint, its DFlash2 drafter, which its lane loads when
 # the box chose that drafter, and the image its model card names, pulled as is.
 fline="$(grep -E '^FLASH_LOCAL_(REPO|REV|IMAGE|DRAFT_REPO|DRAFT_REV)=' "$REPO_DIR/install-flash-local.sh")"
 eval "$fline"
-# The Ornith lane's: its authors' checkpoint (its image is the Flash FP4-Local lane's, checked below).
+# The Ornith lane's: its authors' checkpoint (its image is the Qwen3.8 Flash-Next FP4-Local lane's, checked below).
 oline="$(grep -E '^ORNITH_122B_(REPO|REV)=' "$REPO_DIR/install-ornith-122b.sh")"
 eval "$oline"
 # The speech lane's: llama.cpp's commit, each recognizer's two GGUF at its revision with the
@@ -415,7 +415,7 @@ check_wheel  nemotron-b12x  b12x "$NEMOTRON_B12X_VERSION" "$NEMOTRON_B12X_URL" "
 echo "Nemotron Super lane"
 check_model  nemotron-super "$NEMOTRON_SUPER_REPO" "$NEMOTRON_SUPER_REV"
 check_model  super-draft    "$NEMOTRON_SUPER_DRAFT_REPO" "$NEMOTRON_SUPER_DRAFT_REV"
-echo "Flash FP4-Local lane"
+echo "Qwen3.8 Flash-Next FP4-Local lane"
 check_model  flash-local       "$FLASH_LOCAL_REPO" "$FLASH_LOCAL_REV"
 check_model  flash-local-draft "$FLASH_LOCAL_DRAFT_REPO" "$FLASH_LOCAL_DRAFT_REV"
 echo "Ornith 1.5 122B lane"

@@ -761,9 +761,9 @@ class TheWholeScripts(unittest.TestCase):
         copy.write_text(copy.read_text().replace("/proc/meminfo", str(mem)))
         r, out, record = self.run_install(box, str(copy), QWEN38_MEMINFO=str(mem))
         self.assertIn(wall.WALL, out, out[-800:])
-        self.assertIn("This box is a 64 GB DGX Spark: the lanes that fit it are the 27B and Nemotron 3.5 Bolt here", out)
-        self.assertIn("Left out, as they need a 128 GB one: image (Qwen-Image 2.1), video (MiniMax-H3), flash 176B, Kolibri-1, "
-                      "Nemotron 3.5 Super VL, Flash FP4-Local, Ornith 1.5 122B.", out)
+        self.assertIn("This box is a 64 GB DGX Spark: the lanes that fit it are the Qwen3.8 27B and Nemotron 3.5 Bolt here", out)
+        self.assertIn("Left out, as they need a 128 GB one: image (Qwen-Image 2.1), video (MiniMax-H3), Qwen3.8 Flash-Next, Kolibri-1, "
+                      "Nemotron 3.5 Super VL, Qwen3.8 Flash-Next FP4-Local, Ornith 1.5 122B.", out)
         self.assertIn("Context mode: native (262144 tokens), the one a 64 GB DGX Spark holds.", out)
         self.assertNotIn("needs a ~121 GB", out)
 
@@ -773,7 +773,7 @@ class TheWholeScripts(unittest.TestCase):
                 ((), {"MODEL_CHOICE": "fp8"}, "MODEL_CHOICE=fp8 (Qwen's FP8 weights, 30.9 GB) leaves the 27B's KV pool too little"),
                 ((), {"CONTEXT_MODE": "1m"}, "CONTEXT_MODE=1m needs a 128 GB DGX Spark"),
                 (("--with-video",), {}, "The video (MiniMax-H3) lane needs a 128 GB DGX Spark, and this box is a 64 GB one. Drop --with-video."),
-                (("--with-flash-local",), {}, "The Flash FP4-Local lane needs a 128 GB DGX Spark")):
+                (("--with-flash-local",), {}, "The Qwen3.8 Flash-Next FP4-Local lane needs a 128 GB DGX Spark")):
             with self.subTest(args or env):
                 box = box_for_step_1(docker_err="", docker_rc=0, member=True, in_session=True)
                 copy = pathlib.Path(wall.walled(at=GRANT_LINE, after=True))

@@ -79,7 +79,7 @@ const STATE_LABEL = {
 // the word for a lane, with what the start guard or a lost scheduler adds to its state: a lane
 // held by the guard read "starting", one it refused "failed" (engine-preflight.sh, issue #26),
 // a flash lane on a GPU outside its ATS mode is no matter of memory (issue #54), and neither is the
-// Flash FP4-Local lane missing a file it reads (its unit's guard)
+// Qwen3.8 Flash-Next FP4-Local lane missing a file it reads (its unit's guard)
 const stateLabel = e => !e ? '' : e.held ? 'waiting for GPU memory' : e.refused ? 'not starting: GPU memory held'
   : e.cannot ? 'cannot start on this GPU' : e.lacks ? 'cannot start: a file is missing' : e.zombie ? 'lost its scheduler' : e.state === 'failed' && e.crashed_serving ? 'restarting after a crash'
   : (STATE_LABEL[e.state] || e.state);
@@ -102,20 +102,21 @@ const U27 = 'qwen38-sglang.service', UFLASH = 'qwen38-flash.service', IMAGE_UNIT
 const LANE_UNITS = [U27, UFLASH, FLASH_LOCAL_UNIT, ORNITH_UNIT, KOLIBRI_UNIT, NEMOTRON_UNIT, NEMOTRON_SUPER_UNIT, IMAGE_UNIT, VIDEO_UNIT];
 // the two Nemotron lanes, Bolt and Super VL: one vLLM image, the same routes and the same limits
 const isNemotron = u => u === NEMOTRON_UNIT || u === NEMOTRON_SUPER_UNIT;
-// the vLLM lanes on b12x, the two Nemotron lanes, the Flash FP4-Local lane and the Ornith lane: the
+// the vLLM lanes on b12x, the two Nemotron lanes, the Qwen3.8 Flash-Next FP4-Local lane and the Ornith lane: the
 // same routes, the same counters, the same belts that cannot act; each says its own name
 const isB12x = u => isNemotron(u) || u === FLASH_LOCAL_UNIT || u === ORNITH_UNIT;
-const b12xName = u => u === FLASH_LOCAL_UNIT ? 'the Flash FP4-Local lane' : u === ORNITH_UNIT ? 'the Ornith lane' : 'the Nemotron lane';
-const LANE_NAME = {[U27]: '27B', [UFLASH]: 'flash 176B', [FLASH_LOCAL_UNIT]: 'Flash FP4-Local', [KOLIBRI_UNIT]: 'Kolibri-1',
-                   [NEMOTRON_UNIT]: 'Nemotron Bolt', [NEMOTRON_SUPER_UNIT]: 'Nemotron Super VL', [ORNITH_UNIT]: 'Ornith 1.5 122B',
-                   [IMAGE_UNIT]: 'Qwen-Image',
-                   [VIDEO_UNIT]: 'MiniMax-H3'};
+const b12xName = u => u === FLASH_LOCAL_UNIT ? 'the Qwen3.8 Flash-Next FP4-Local lane' : u === ORNITH_UNIT ? 'the Ornith lane' : 'the Nemotron lane';
+// The lanes' names in sentences, each its family's official name (decision 1180 of Hasan, 2026-11-07: no name of
+// our own, neither for a lane nor for its default version)
+const LANE_NAME = {[U27]: 'Qwen3.8 27B', [UFLASH]: 'Qwen3.8 Flash-Next', [FLASH_LOCAL_UNIT]: 'Qwen3.8 Flash-Next FP4-Local',
+                   [KOLIBRI_UNIT]: 'Kolibri-1', [NEMOTRON_UNIT]: 'Nemotron 3.5 Bolt', [NEMOTRON_SUPER_UNIT]: 'Nemotron 3.5 Super VL',
+                   [ORNITH_UNIT]: 'Ornith 1.5 122B', [IMAGE_UNIT]: 'Qwen-Image 2.1', [VIDEO_UNIT]: 'MiniMax-H3'};
 // What each lane is, for people: the kind of work it does and the one line that says so.
 // `lane` names the lane's hue in the stylesheet (--lane-<lane>); `maker` its mark in img/logos.
 const LANE_META = {
   [U27]: {title: 'Qwen3.8 27B', kind: 'Text, up to 1M tokens of context', desc: 'Dense 27B in NVFP4 with a DFlash2 draft. The long-context lane.', view: 'agent', lane: '27b', maker: 'qwen'},
-  [UFLASH]: {title: 'Flash 176B', kind: 'Text, 262K tokens of context', desc: 'Mixture of experts, 176B in NVFP4 with its own draft head. The fast lane for agents.', view: 'agent', lane: 'flash', maker: 'qwen'},
-  [FLASH_LOCAL_UNIT]: {title: 'Flash FP4-Local (NVIDIA)', kind: 'Text and images, 262K tokens of context', desc: 'The same 176B model in NVIDIA’s own FP4 build, distilled from its full precision, served by vLLM with b12x as NVIDIA’s model card says. Reasoning, tool calls and vision.', view: 'agent', lane: 'flash-local', maker: 'nvidia'},
+  [UFLASH]: {title: 'Qwen3.8 Flash-Next', kind: 'Text, 262K tokens of context', desc: 'Mixture of experts, 176B in NVFP4 with its own draft head. The fast lane for agents.', view: 'agent', lane: 'flash', maker: 'qwen'},
+  [FLASH_LOCAL_UNIT]: {title: 'Qwen3.8 Flash-Next FP4-Local', kind: 'Text and images, 262K tokens of context', desc: 'The same 176B model in NVIDIA’s own FP4 build, distilled from its full precision, served by vLLM with b12x as NVIDIA’s model card says. Reasoning, tool calls and vision.', view: 'agent', lane: 'flash-local', maker: 'nvidia'},
   [KOLIBRI_UNIT]: {title: 'Kolibri-1', kind: 'Text, 262K tokens, German and English', desc: 'Aleph Alpha’s mixture of experts, 78B with 3.5B active, served by vLLM. Reasoning and tool calls.', view: 'agent', lane: 'kolibri', maker: 'alephalpha'},
   [NEMOTRON_UNIT]: {title: 'Nemotron 3.5 Bolt', kind: 'Text, images and video, 262K tokens', desc: 'NVIDIA’s mixture of experts, 74B with 9B active in 2 bits, served by vLLM with its drafter. Reasoning, tool calls and vision.', view: 'agent', lane: 'nemotron', maker: 'nvidia'},
   [NEMOTRON_SUPER_UNIT]: {title: 'Nemotron 3.5 Super VL', kind: 'Text, images and video, 1M tokens', desc: 'NVIDIA’s mixture of experts, 120B with 12B active in NVFP4, served by vLLM with its drafter. Reasoning, tool calls and vision over a 1M window.', view: 'agent', lane: 'nemotron-super', maker: 'nvidia'},
@@ -132,10 +133,6 @@ function makerMark(unit, cls = 'mark'){
 // boots (measured on the reference box). Once a lane booted in front of the cockpit, the
 // median of its own boots replaces these.
 const READY_DEFAULT = {[U27]: 540, [UFLASH]: 780, [FLASH_LOCAL_UNIT]: 1020, [KOLIBRI_UNIT]: 600, [NEMOTRON_UNIT]: 450, [NEMOTRON_SUPER_UNIT]: 660, [ORNITH_UNIT]: 420, [IMAGE_UNIT]: 70, [VIDEO_UNIT]: 720};
-const TARGET_SHORT = {stock: 'stock', uncensored: 'uncensored', fp8: 'FP8', 'uncensored-fp8': 'FP8 uncensored',
-                      flash: '', 'flash-uncensored': 'uncensored', 'flash-nvda': 'NVIDIA export', image: '2.1', 'image-turbo': 'Turbo', video: 'H3',
-                      kolibri: 'FP8', 'kolibri-nvfp4': 'NVFP4', nemotron: 'Bolt', 'nemotron-super': 'Super VL',
-                      'flash-local': 'FP4-Local', 'flash-local-dflash2': 'DFlash2', 'ornith-122b': '122B'};
 const TARGET_UNIT = t => t === 'image' || t === 'image-turbo' ? IMAGE_UNIT : t === 'video' ? VIDEO_UNIT
   : String(t).startsWith('kolibri') ? KOLIBRI_UNIT : t === 'nemotron-super' ? NEMOTRON_SUPER_UNIT : String(t).startsWith('nemotron') ? NEMOTRON_UNIT
   : t === 'flash-local' || t === 'flash-local-dflash2' ? FLASH_LOCAL_UNIT : t === 'ornith-122b' ? ORNITH_UNIT : String(t).startsWith('flash') ? UFLASH : U27;
@@ -143,18 +140,25 @@ const LANE_TARGETS = {[U27]: ['stock', 'uncensored', 'fp8', 'uncensored-fp8'], [
                       [FLASH_LOCAL_UNIT]: ['flash-local', 'flash-local-dflash2'],
                       [KOLIBRI_UNIT]: ['kolibri', 'kolibri-nvfp4'], [NEMOTRON_UNIT]: ['nemotron'], [NEMOTRON_SUPER_UNIT]: ['nemotron-super'],
                       [ORNITH_UNIT]: ['ornith-122b'], [IMAGE_UNIT]: ['image', 'image-turbo'], [VIDEO_UNIT]: ['video']};
-const TARGET_NAME = {stock: '27B stock, NVFP4', uncensored: '27B uncensored, NVFP4', fp8: '27B FP8, Qwen official',
-                     'uncensored-fp8': '27B FP8 uncensored', flash: 'flash 176B, NVFP4', 'flash-uncensored': 'flash 176B uncensored',
-                     'flash-nvda': 'flash 176B, NVIDIA export', image: 'Qwen-Image 2.1', 'image-turbo': 'Qwen-Image 2.1 Turbo', video: 'MiniMax-H3',
-                     kolibri: 'Kolibri-1, Aleph Alpha FP8', 'kolibri-nvfp4': 'Kolibri-1, NVFP4 experts', nemotron: 'Nemotron 3.5 Bolt, 24 GB',
-                     'nemotron-super': 'Nemotron 3.5 Super VL, NVFP4', 'flash-local': 'Flash FP4-Local, NVIDIA',
-                     'flash-local-dflash2': 'Flash FP4-Local, NVIDIA + DFlash2',
-                     'ornith-122b': 'Ornith 1.5 122B, NVFP4'};
+// Each version's official name: the model, its precision, and who publishes it, read off the repository its
+// installer pins (decisions 1180 and 1185: "abliterated", the word of those builds' own makers, never "uncensored"
+// nor "stock"; the targets' ids, in commands, do not change). dashboard/tests/test_target_names.py reads each
+// repository back from the installers.
+const TARGET_NAME = {stock: 'Qwen3.8 27B NVFP4 · RadixArk', uncensored: 'Qwen3.8 27B abliterated NVFP4 · edp1096',
+                     fp8: 'Qwen3.8 27B FP8 · Qwen', 'uncensored-fp8': 'Qwen3.8 27B abliterated FP8 · edp1096',
+                     flash: 'Qwen3.8 Flash-Next NVFP4 · RadixArk', 'flash-uncensored': 'Qwen3.8 Flash-Next abliterated NVFP4 · dealignai',
+                     'flash-nvda': 'Qwen3.8 Flash-Next NVFP4 · NVIDIA', 'flash-local': 'Qwen3.8 Flash-Next FP4-Local · NVIDIA',
+                     'flash-local-dflash2': 'Qwen3.8 Flash-Next FP4-Local DFlash2 · NVIDIA',
+                     image: 'Qwen-Image 2.1 · Qwen', 'image-turbo': 'Qwen-Image 2.1 Turbo · Qwen', video: 'MiniMax-H3 · MiniMax',
+                     kolibri: 'Kolibri-1 FP8 · Aleph Alpha', 'kolibri-nvfp4': 'Kolibri-1 NVFP4 · Quantinine',
+                     nemotron: 'Nemotron 3.5 Bolt 24GB · NVIDIA', 'nemotron-super': 'Nemotron 3.5 Super VL NVFP4 · NVIDIA',
+                     'ornith-122b': 'Ornith 1.5 122B NVFP4 · Ornith AI'};
 // A version's name on its button in Lanes, and the line that tells it apart once chosen. A
 // target is declared in the tables of this block: a page test fails when one lacks a name or a line.
-const TARGET_SHORT_NAME = {stock: 'Stock', uncensored: 'Uncensored', fp8: 'FP8', 'uncensored-fp8': 'FP8 uncensored',
-  flash: 'Standard', 'flash-uncensored': 'Uncensored', 'flash-nvda': 'NVIDIA export', image: 'Base', 'image-turbo': 'Turbo', video: 'H3',
-  kolibri: 'FP8', 'kolibri-nvfp4': 'NVFP4', nemotron: 'Bolt', 'nemotron-super': 'Super VL', 'flash-local': 'FP4-Local',
+const TARGET_SHORT_NAME = {stock: 'NVFP4 · RadixArk', uncensored: 'Abliterated NVFP4 · edp1096', fp8: 'FP8 · Qwen',
+  'uncensored-fp8': 'Abliterated FP8 · edp1096', flash: 'NVFP4 · RadixArk', 'flash-uncensored': 'Abliterated NVFP4 · dealignai',
+  'flash-nvda': 'NVFP4 · NVIDIA', image: 'Base', 'image-turbo': 'Turbo', video: 'H3', kolibri: 'FP8 · Aleph Alpha',
+  'kolibri-nvfp4': 'NVFP4 · Quantinine', nemotron: 'Bolt', 'nemotron-super': 'Super VL', 'flash-local': 'FP4-Local',
   'flash-local-dflash2': 'FP4-Local + DFlash2',
   'ornith-122b': '122B'};
 const TARGET_LINE = {
@@ -170,7 +174,7 @@ const TARGET_LINE = {
   'ornith-122b': 'The one version: its authors’ NVFP4 build and its MTP head'};
 const TARGET_NOTE = {
   stock: 'The NVFP4 quantization this repo pins by default: smallest and fastest of the 27B targets.',
-  uncensored: 'The abliterated NVFP4 checkpoint: same size and speed as stock, refusals removed.',
+  uncensored: 'The abliterated NVFP4 checkpoint: same size and speed as RadixArk’s NVFP4, refusals removed.',
   fp8: 'Qwen’s own FP8 release: the most faithful weights of this lane, and the heaviest. 30.9 GB against 21 GB for NVFP4, taken out of the KV pool: around 200,000 fewer tokens of context and a slower decode. The first switch downloads about 31 GB.',
   'uncensored-fp8': 'The abliterated weights in Qwen’s FP8 format: the same 30.9 GB and the same cost in pool and speed as FP8. The first switch downloads about 31 GB.',
   flash: 'The 176B Flash-Next lane: its own unit, its own image, and a 47.7 GiB N-gram table on the NVMe that the server rewrites at every boot.',
@@ -185,7 +189,7 @@ const TARGET_NOTE = {
   'nemotron-super': 'NVIDIA’s Nemotron 3.5 Super VL in NVFP4, served as its model card says for a DGX Spark: its LiLiCorr drafter, a window of 1,048,576 tokens, the Mamba state in float16 with stochastic rounding, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request), in the Nemotron Bolt lane’s vLLM image. It reads images and video. Measured on this box: 70 tokens/s alone on code, 31 on prose, its whole window 1.1 to 1.3 times over in its cache. The first switch downloads about 77 GB.',
   'flash-local': 'NVIDIA’s own FP4 build of the flash model, served as its model card says for a DGX Spark: vLLM with b12x, its experts and its n-gram table in NVFP4 after a quantization-aware distillation from the full precision (GPQA Diamond 91.5 % against 92.2 % on NVIDIA’s card), an MTP head drafting 4 tokens, 262,144 tokens of context and a KV cache of about 920,000 tokens, reasoning on at xhigh unless a request asks less. Its table is read at every token: with the HF cache on another disk, its first Load copies the table’s files (32 GB) beside your home directory. The first boot tunes b12x’s kernels for this GPU, about 17 min; the next ones take about 6. The first switch downloads about 102 GB.',
   'flash-local-dflash2': 'The same FP4 build and the same serving command, drafted by incoai’s DFlash2 drafter for this model (about 1.2 GB, fetched with the checkpoint on the first switch) instead of its own MTP head: the drafter’s capture plugin is mounted read-only at /opt/df2-plugin beside the key middleware, and the target builds into its own caches, flash-local-cache-dflash2/, because the compiled drafter and the kernel choices of one drafter’s run are not the other’s. The box serves it under the same name, qwen3.8-flash-next-fp4, with the output head in BF16 instead of MXFP8, which the drafter shares.',
-  'ornith-122b': 'Ornith AI’s Ornith 1.5 122B (MIT) in its authors’ NVFP4 build, served by vLLM with b12x in the Flash FP4-Local lane’s image: its experts and output head in NVFP4, its projections in FP8, an MTP head drafting 2 tokens, 1,048,576 tokens of context (its own 262,144 stretched four times with YaRN), temperature 0.6, top_p 0.95, top_k 20, reasoning on (off with effort none or minimal). It reads images and video. The first switch downloads about 78 GB.'};
+  'ornith-122b': 'Ornith AI’s Ornith 1.5 122B (MIT) in its authors’ NVFP4 build, served by vLLM with b12x in the Qwen3.8 Flash-Next FP4-Local lane’s image: its experts and output head in NVFP4, its projections in FP8, an MTP head drafting 2 tokens, 1,048,576 tokens of context (its own 262,144 stretched four times with YaRN), temperature 0.6, top_p 0.95, top_k 20, reasoning on (off with effort none or minimal). It reads images and video. The first switch downloads about 78 GB.'};
 // What installs a lane this box does not have. Since v1.20 a plain ./install.sh installs
 // every lane, so one missing here was left out (a --no-<lane> on the last run) or did not fit:
 // --with-<lane> installs it beside the lane that serves, which keeps serving. A text lane comes with
@@ -260,11 +264,38 @@ function laneTarget(unit){
 function laneLabel(unit){
   if (unit === AGENT_UNIT) return 'the opencode web server';
   if (unit === PROXY_UNIT) return 'the keepalive proxy';
-  const base = LANE_NAME[unit] || unit.replace('.service', '');
   const t = laneTarget(unit);
-  // a lane named after its checkpoint (MiniMax-H3) does not repeat it: "MiniMax-H3 H3"
-  const s = t && TARGET_SHORT[t] && !base.endsWith(TARGET_SHORT[t]) ? ' ' + TARGET_SHORT[t] : '';
-  return base + s;
+  return (t && TARGET_NAME[t]) || LANE_NAME[unit] || unit.replace('.service', '');
+}
+// A lane's name in two parts, the family (LANE_NAME) and what follows it (its precision and who publishes it), for
+// the places too narrow for the whole: a phone's capsule says the family alone (the version's full name pushed
+// its state, "ready", out of it, 2026-11-08), and a bay's title breaks between the two, never after the " · ".
+function nameParts(full, unit){
+  const fam = LANE_NAME[unit] || '';
+  return fam && full.startsWith(fam + ' ') ? [fam, full.slice(fam.length + 1)] : [full, ''];
+}
+// The engine a lane runs and its version, the one way the page says them (decision 1178): dashboard/engines.py's
+// table, which its tests check against the installers' pins. 'SGLang 0.5.22'; '' for a unit with none. The lane that
+// serves says the version its engine reports (engine_info): when that is not the one the pinned image reports (an
+// image of the operator's), the engine's own word is said, never the pin's.
+// a lane's kind with the window it runs, where that is the 1M one its installer offers (FLASH_LOCAL_CONTEXT=1m,
+// discussion #63): the words of LANE_META say the native window, and said "262K" of a lane serving 1,048,576. The lane
+// that serves says its engine's window (engine_info), the others the one their unit starts with: a unit staged again
+// while its lane serves names a window its engine does not run yet (code review of v1.45.2)
+const laneKind = unit => {
+  const k = LANE_META[unit].kind, live = F.liveEngine && F.liveEngine.unit === unit ? F.liveEngine.window : 0;
+  const w = live > 0 ? live : ((F.engineTable || {})[unit] || {}).window;
+  return w >= 1000000 && /262K tokens/.test(k) ? k.replace('262K tokens', '1M tokens') : k;
+};
+function engineLabel(unit){
+  // the table the cockpit reads every 30 s (engine_table)
+  const e = ((F.engineTable || {})[unit]);
+  if (!e) return '';
+  // the engine's own word, for the lane that serves (F.liveEngine, cleared once that lane no longer serves)
+  const live = F.liveEngine && F.liveEngine.unit === unit ? String(F.liveEngine.version || '').replace(/^vLLM /, '') : '';
+  if (live) return e.reports && live !== e.reports ? `${e.engine} ${live}` : e.label;
+  // a lane its installer set on an image of the operator's: not the pin's version (pinned, read in its unit)
+  return e.pinned === false ? `${e.engine}, another image` : e.label;
 }
 // When systemctl did not say ('?'), the lifecycle's list decides: it leaves out a diffusion lane
 // with no unit file. Read as installed, '?' showed the image and video lanes of a box whose
@@ -507,11 +538,11 @@ const NEMOTRON_CANNOT = {
   flush_cache: 'The Nemotron lane has no cache flush route: vLLM evicts its prefix cache by itself.',
   abort_all: 'The Nemotron lane has no route that aborts its generations: stopping the lane stops them.',
   fit_opencode: 'Nemotron\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
-// and the Flash FP4-Local lane, in its own name, as the server says it (cockpit.py FLASH_LOCAL_CANNOT)
+// and the Qwen3.8 Flash-Next FP4-Local lane, in its own name, as the server says it (cockpit.py FLASH_LOCAL_CANNOT)
 const FLASH_LOCAL_CANNOT = {
-  flush_cache: 'The Flash FP4-Local lane has no cache flush route: vLLM evicts its prefix cache by itself.',
-  abort_all: 'The Flash FP4-Local lane has no route that aborts its generations: stopping the lane stops them.',
-  fit_opencode: 'The Flash FP4-Local lane\'s opencode limits are its own, set when it is loaded: its window decides them, not its pool.'};
+  flush_cache: 'The Qwen3.8 Flash-Next FP4-Local lane has no cache flush route: vLLM evicts its prefix cache by itself.',
+  abort_all: 'The Qwen3.8 Flash-Next FP4-Local lane has no route that aborts its generations: stopping the lane stops them.',
+  fit_opencode: 'The Qwen3.8 Flash-Next FP4-Local lane\'s opencode limits are its own, set when it is loaded: its window decides them, not its pool.'};
 // and the Ornith lane, in its own name (cockpit.py ORNITH_CANNOT)
 const ORNITH_CANNOT = {
   flush_cache: 'The Ornith lane has no cache flush route: vLLM evicts its prefix cache by itself.',
@@ -698,7 +729,7 @@ async function runAction(name, params){
 async function sheetGo(){
   if (!SHEET || SHEET.running) return;
   if (SHEET.mode === 'journey') return runJourney();
-  SHEET.running = true; const go = $('sh-go'); go.disabled = true; $('sh-cancel').disabled = true; setText('sh-status', 'starting…');
+  SHEET.running = true; const go = $('sh-go'); go.disabled = true; $('sh-cancel').disabled = true; setText('sh-status', 'sending…');
   const {name, params} = SHEET;
   try{
     const r = await runAction(name, params);
@@ -706,7 +737,7 @@ async function sheetGo(){
       if (name === 'unit' && params.unit === IMAGE_UNIT && params.verb !== 'start') IMG_INTERRUPTED_AT.t = Date.now();
       if (name === 'unit' && params.unit === VIDEO_UNIT && params.verb !== 'start') VID_INTERRUPTED_AT.t = Date.now();
       SHEET.running = false; closeSheet(!0);
-      toast(`${cap1(actionPhrase(name, params))}: started${r.out.dry_run ? ' (dry run)' : ''}. The dock follows it.`, 'ok');
+      toast(`${cap1(actionPhrase(name, params))}: running${r.out.dry_run ? ' (dry run)' : ''}. The dock follows it.`, 'ok');
       dockPinned = false; return;
     }
     if (r.status === 409 && r.out.reasons){ $('sh-status').className = 'status err'; setText('sh-status', 'Blocked: ' + r.out.reasons.join('; ')); }
@@ -729,7 +760,7 @@ const LANE_RUNTIME = {flash: 'its SGLang image (about 16 GB to download), its ch
   nemotron: 'its vLLM image, about 11 GB to download (25 GB on disk), pulled and built here',
   'nemotron-super': 'the Nemotron lanes’ vLLM image (the Bolt lane’s), about 11 GB to download (25 GB on disk), pulled and built here once for the two',
   'flash-local': 'its vLLM image with b12x, about 10 GB to download (18 GB on disk), pulled as its model card names it',
-  'ornith-122b': 'the Flash FP4-Local lane’s vLLM image with b12x, about 10 GB to download (18 GB on disk), pulled once for the two'};
+  'ornith-122b': 'the Qwen3.8 Flash-Next FP4-Local lane’s vLLM image with b12x, about 10 GB to download (18 GB on disk), pulled once for the two'};
 const SIDE_LANE = {[IMAGE_UNIT]: 'image', [VIDEO_UNIT]: 'video', [KOLIBRI_UNIT]: 'kolibri', [NEMOTRON_UNIT]: 'nemotron',
                    [NEMOTRON_SUPER_UNIT]: 'nemotron-super', [FLASH_LOCAL_UNIT]: 'flash-local', [ORNITH_UNIT]: 'ornith-122b',
                    [UFLASH]: 'flash', [U27]: '27b'};
@@ -952,24 +983,37 @@ function waitFor(pred, timeoutMs){
 
 // ── the dock: the job running now, from every view and every browser ─────────
 let dockPinned = false, dockHidden = null, lastFinished;
-const JOBLINES = {id: null, lines: [], final: null};
+const JOBLINES = {id: null, lines: [], final: null, read: null};
+// A job that prints nothing, like systemctl, said "starting…" under "Stop 27B" while it stopped the lane, and its log
+// "(no output yet)" after it had ended (issue #64): it says what it does in its own verb, and its log the command first
+const UNIT_DOING = {start: 'starting', stop: 'stopping', restart: 'restarting'};
+const jobDoing = j => `${(j.action === 'unit' && UNIT_DOING[(j.params || {}).verb]) || 'running'}, nothing printed yet`;
+// "(it printed nothing)" only once its last lines were read: a page opened after the job had ended said it of a job
+// that printed hundreds of lines until the fetch answered, and for good when it failed (review of v1.45.0). And no
+// "$" line in a dry run, where nothing runs: the server's own line says what would have (review of v1.45.0)
+function jobLog(j, lines, ended){
+  const head = j && j.argv && !j.dry_run ? ['$ ' + j.argv.join(' ')] : [];
+  const none = !ended ? '(nothing printed yet)' : j && JOBLINES.read === j.id ? '(it printed nothing)' : '(reading its log…)';
+  return head.concat(lines.length ? lines : [none]).join('\n');
+}
 function describeJob(j){ return cap1(actionPhrase(j.action, j.params)) + (j.origin === 'autoheal' ? ', by the autoheal belt' : '') + (j.dry_run ? ' (dry run)' : ''); }
 function renderJob(d){
   F.job = d;
   const dock = $('dock'), cur = d.current, recent = (d.recent || [])[0];
   const now = Date.now() / 1000;
-  let showIt = false;
+  let showIt = false, shown = null;
   if (cur){
+    shown = cur;
     showIt = dockHidden !== cur.id;
     dock.className = 'dock'; $('dock-lamp').className = 'lamp warn live';
     setText('dock-what', describeJob(cur)); setText('dock-time', fmtDur(cur.elapsed));
     show('dock-bar', true);
     if (JOBLINES.id !== cur.id){ JOBLINES.id = cur.id; JOBLINES.lines = []; }
     if (cur.lines && cur.lines.length) JOBLINES.lines = cur.lines;
-    setText('dock-last', JOBLINES.lines.length ? JOBLINES.lines[JOBLINES.lines.length - 1] : 'starting…');
+    setText('dock-last', JOBLINES.lines.length ? JOBLINES.lines[JOBLINES.lines.length - 1] : jobDoing(cur));
   } else {
     if (recent && (now - (recent.ended || recent.started) < 60 || dockPinned) && dockHidden !== recent.id){
-      showIt = true;
+      showIt = true; shown = recent;
       const ok = recent.status === 'done';
       dock.className = 'dock ' + (ok ? 'done' : 'failed'); $('dock-lamp').className = 'lamp ' + (ok ? 'ok' : 'err');
       setText('dock-what', describeJob(recent)); setText('dock-time', fmtDur(recent.elapsed)); show('dock-bar', false);
@@ -987,7 +1031,7 @@ function renderJob(d){
   }
   dock.hidden = !showIt;
   renderPip();
-  setText('dock-pre', JOBLINES.lines.join('\n') || '(no output yet)');
+  setText('dock-pre', jobLog(shown, JOBLINES.lines, !cur));
   const pre = $('dock-pre'); if (!pre.hidden) pre.scrollTop = pre.scrollHeight;
   const say = cur ? `${describeJob(cur)}: running` : recent ? `${describeJob(recent)}: ${recent.status}` : '';
   say && sayOnce('job', say);
@@ -995,7 +1039,7 @@ function renderJob(d){
 }
 async function fetchJobLines(id){
   try{ const r = await fetch('/api/jobs/' + id); if (r.status === 401) return login(); if (!r.ok) return;
-    const j = await r.json(); if (JOBLINES.id === id){ JOBLINES.lines = j.lines || []; setText('dock-pre', JOBLINES.lines.join('\n') || '(no output)'); } }
+    const j = await r.json(); if (JOBLINES.id === id){ JOBLINES.lines = j.lines || []; JOBLINES.read = id; setText('dock-pre', jobLog(Object.assign({id}, j), JOBLINES.lines, true)); } }
   catch { /* the dock keeps what it has */ }
 }
 // what a screen reader hears when a lane or a job changes state, once per change
@@ -1270,8 +1314,10 @@ const fmtAtLeast = s => {
   const m = Math.floor(s / 60);
   return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + String(m % 60).padStart(2, '0');
 };
-const promptWords = p => !p ? '' : `computing its prompt: ${Math.round(100 * p.share)} % of ${fmtN(p.tokens)} tokens after ${fmtDur(p.elapsed)}`
+// how far a prompt the cache could not serve has got (issue #61): the Activity panel of Now, and the feed's row
+const promptProgress = p => !p ? '' : `${Math.round(100 * p.share)} % of ${fmtN(p.tokens)} tokens after ${fmtDur(p.elapsed)}`
   + (p.left_min_s != null ? `, at least ${fmtAtLeast(p.left_min_s)} left` : p.share >= 0.99 ? ', almost done' : '');
+const promptWords = p => !p ? '' : `computing its prompt: ${promptProgress(p)}`;
 
 // ── wiring the shell ──────────────────────────────────────────────────────────
 function wireShell(){

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""install-flash-local.sh --stage: the unit a switch to the Flash FP4-Local lane puts in place.
+"""install-flash-local.sh --stage: the unit a switch to the Qwen3.8 Flash-Next FP4-Local lane puts in place.
 
 switch-model.sh flash-local fetches the checkpoint, then has the lane's installer write its unit
 to a fixed staging path with no sudo (the one renderer, so a switch puts in the unit an install
@@ -23,6 +23,11 @@ from test_lean_level import STOCK  # noqa: E402  (the template patch-template.py
 PINS = {k: v.strip('"') for k, v in (line.split("=", 1) for line in (REPO / "install-flash-local.sh").read_text().splitlines()
                                        if line.startswith("FLASH_LOCAL_") and "=" in line)}
 HUB = "models--" + PINS["FLASH_LOCAL_REPO"].replace("/", "--")
+# the installer's lines from the choice to the render read the lane's second target too (flash-local-dflash2): the
+# drafter's pins and flags, and the unit installed, which here is none, so the slice resolves the mtp target
+LANE_PINS = [f'{k}="{PINS[k]}"' for k in ("FLASH_LOCAL_IMAGE", "FLASH_LOCAL_DRAFT_REPO", "FLASH_LOCAL_DRAFT_REV",
+                                           "FLASH_LOCAL_DRAFT_LOAD_FORMAT", "FLASH_LOCAL_DRAFT_ATTENTION_BACKEND")]
+LANE_PINS.append('INSTALLED="$CONFIG_DIR/none.service"')
 
 
 class Box:
@@ -364,6 +369,298 @@ class TheStagedUnit(unittest.TestCase):
         rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
         self.assertNotEqual(rc, 0, out)
         self.assertFalse(self.box.out.exists() and self.box.out.read_text().strip(), "a unit staged with no checkpoint")
+
+
+
+class TheMillionTokenWindow(unittest.TestCase):
+    """Discussion #63 (2026-11-09): FLASH_LOCAL_CONTEXT=1m serves 1,048,576 tokens by YaRN, as measured on the reference
+    box (8 passphrases of 8 retrieved up to 1,036,576 tokens). The overrides come from the pinned checkpoint's own RoPE,
+    and the choice is kept for the Loads after, which stage the unit with none of the user's environment."""
+
+    CONFIG = {"text_config": {"max_position_embeddings": 262144, "rope_parameters": {
+        "mrope_interleaved": True, "mrope_section": [11, 11, 10], "partial_rotary_factor": 0.25,
+        "rope_theta": 10000000, "rope_type": "default"}}}
+
+    def setUp(self):
+        self.box = Box()
+        self.snap = self.box.hf / "hub" / HUB / "snapshots" / PINS["FLASH_LOCAL_REV"]
+        (self.snap / "config.json").write_text(json.dumps(self.CONFIG))
+        self.cfg = self.box.home / ".config" / "qwen38"
+
+    def tearDown(self):
+        shutil.rmtree(self.box.t, ignore_errors=True)
+
+    def window(self):
+        return re.search(r"--max-model-len (\d+) ", self.box.out.read_text()).group(1)
+
+    def test_native_by_default_1m_when_asked_and_kept_for_the_loads_after(self):
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.window(), "262144")
+        self.assertNotIn("--hf-overrides", self.box.out.read_text())
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.window(), "1048576")
+        cmd = exec_command(self.box.out.read_text())
+        self.assertIn(f'--hf-overrides "$(cat {self.cfg}/flash-local-yarn.json)"', cmd)
+        r = subprocess.run(["bash", "-n", "-c", cmd], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        y = json.loads((self.cfg / "flash-local-yarn.json").read_text())["text_config"]
+        self.assertEqual(y["max_position_embeddings"], 1048576)
+        self.assertEqual(y["rope_parameters"], {"mrope_interleaved": True, "mrope_section": [11, 11, 10],
+                                                "partial_rotary_factor": 0.25, "rope_theta": 10000000,
+                                                "rope_type": "yarn", "factor": 4.0,
+                                                "original_max_position_embeddings": 262144})
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")          # a Load: none of the user's environment
+        self.assertEqual((rc, self.window()), (0, "1048576"), out)
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="native")
+        self.assertEqual((rc, self.window()), (0, "262144"), out)
+        self.assertFalse((self.cfg / "flash-local-context").exists())
+
+    def test_a_checkpoint_whose_rope_moved_or_an_unknown_value_is_refused(self):
+        moved = json.loads(json.dumps(self.CONFIG))
+        moved["text_config"]["rope_parameters"]["mrope_section"] = [16, 24, 24]
+        (self.snap / "config.json").write_text(json.dumps(moved))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("RoPE is not the one the 1M window was measured on", out)
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="2m")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("native (262,144 tokens, the default) or 1m", out)
+
+    def test_a_refused_choice_is_not_kept_and_the_refusal_says_how_to_go_back(self):
+        # the choice was kept before its overrides were checked: one refused try left every Load after it refused,
+        # and nothing said how to go back (code review of v1.45.2)
+        moved = json.loads(json.dumps(self.CONFIG))
+        moved["text_config"]["rope_parameters"]["mrope_section"] = [16, 24, 24]
+        (self.snap / "config.json").write_text(json.dumps(moved))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --units-only", out)
+        self.assertFalse((self.cfg / "flash-local-context").exists())
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")          # the Load after it
+        self.assertEqual((rc, self.window()), (0, "262144"), out)
+
+    def test_a_unit_put_in_before_its_checkpoint_keeps_the_native_window_until_its_load(self):
+        # --units-only (an update, a lane installed on demand) renders the unit before the checkpoint is in the cache:
+        # the unit took the 1M window and named overrides no run had written, and its start failed (code review of
+        # v1.45.2). The installer's own lines from the choice to the render run here, as --units-only runs them.
+        (self.snap / "config.json").unlink()
+        text = (REPO / "install-flash-local.sh").read_text()
+        part = text[text.index('CONTEXT_CHOICE="$CONFIG_DIR/flash-local-context"'):
+                    text.index("# Step 4, the one part that needs root")]
+        unit = self.box.t / "units-only.service"
+        script = "\n".join(["set -euo pipefail", 'die(){ echo "die: $*"; exit 1; }', f'HERE="{REPO}"',
+                            "UNIT=qwen38-flash-local.service", f'CONFIG_DIR="{self.cfg}"', f'HF_CACHE="{self.box.hf}"', *LANE_PINS,
+                            f'MODEL="{PINS["FLASH_LOCAL_REPO"]}"', f'MODEL_REV="{PINS["FLASH_LOCAL_REV"]}"', "MODE=units",
+                            "LOCAL_IMAGE=img GMU=0.8 SEQS=8 ENGINE_BIND=127.0.0.1 PORT=30000",
+                            part, f'render_unit "{unit}"'])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.box.home), "FLASH_LOCAL_CONTEXT": "1m"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("--max-model-len 262144 ", unit.read_text())
+        self.assertNotIn("--hf-overrides", unit.read_text())
+        self.assertIn("the checkpoint is not in the cache yet", r.stdout + r.stderr)
+        self.assertEqual((self.cfg / "flash-local-context").read_text(), "1m\n")
+        # its Load, the checkpoint fetched, sets the 1M window
+        (self.snap / "config.json").write_text(json.dumps(self.CONFIG))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual((rc, self.window()), (0, "1048576"), out)
+
+    def test_the_overrides_keep_their_date_when_they_do_not_change(self):
+        # a lane that serves is told it runs older files when one is newer than its start (vlane_put_unit): written
+        # again at every run, the overrides would have said so after every update
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual(rc, 0, out)
+        y = self.cfg / "flash-local-yarn.json"
+        os.utime(y, (1_000_000_000, 1_000_000_000))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(y.stat().st_mtime, 1_000_000_000)
+        y.write_text("{}")                                            # and changed, they are written again
+        os.utime(y, (1_000_000_000, 1_000_000_000))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual(rc, 0, out)
+        self.assertNotEqual(y.stat().st_mtime, 1_000_000_000)
+        self.assertIn('"factor":4.0', y.read_text())
+
+    def test_a_lane_that_serves_is_told_when_its_overrides_changed(self):
+        # vlane_put_unit is handed what the engine reads at its start: the overrides too, when its unit reads them
+        text = (REPO / "install-flash-local.sh").read_text()
+        body = text[text.index("install_service(){"):]
+        body = body[:body.index("\n}\n")]
+        self.assertIn("! grep -q -- '--hf-overrides' \"$RENDER\" || starts+=(\"$YARN_JSON\")", body)
+        self.assertIn('vlane_put_unit "$RENDER" "${starts[@]}"', body)
+
+    def test_a_choice_kept_from_before_that_the_checkpoint_refuses_serves_native_and_the_load_works(self):
+        # kept from before, the choice met a checkpoint whose RoPE is not the one measured (a pin moved): every Load died
+        # until the user found the command to go back (second review of v1.45.2). The Load works, at the native window,
+        # and says why; the choice stays the user's.
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual((rc, self.window()), (0, "1048576"), out)
+        moved = json.loads(json.dumps(self.CONFIG))
+        moved["text_config"]["rope_parameters"]["rope_theta"] = 5000000
+        (self.snap / "config.json").write_text(json.dumps(moved))
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")          # a Load: none of the user's environment
+        self.assertEqual((rc, self.window()), (0, "262144"), out)
+        self.assertNotIn("--hf-overrides", self.box.out.read_text())
+        self.assertIn("is off for this checkpoint", out)
+        self.assertEqual((self.cfg / "flash-local-context").read_text(), "1m\n")
+
+    def run_lines(self, mode, tail, **env):
+        """The installer's own lines from the choice to the render, then `tail`, as `mode` runs them."""
+        text = (REPO / "install-flash-local.sh").read_text()
+        part = text[text.index('CONTEXT_CHOICE="$CONFIG_DIR/flash-local-context"'):
+                    text.index("# Step 4, the one part that needs root")]
+        script = "\n".join(["set -euo pipefail", 'die(){ echo "die: $*"; exit 1; }', "step(){ :; }", f'HERE="{REPO}"',
+                            "UNIT=qwen38-flash-local.service", f'CONFIG_DIR="{self.cfg}"', f'HF_CACHE="{self.box.hf}"', *LANE_PINS,
+                            f'MODEL="{PINS["FLASH_LOCAL_REPO"]}"', f'MODEL_REV="{PINS["FLASH_LOCAL_REV"]}"', f"MODE={mode}",
+                            "LOCAL_IMAGE=img GMU=0.8 SEQS=8 ENGINE_BIND=127.0.0.1 PORT=30000", part, tail])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.box.home), **env})
+        return r.returncode, r.stdout + r.stderr
+
+    def test_prepare_keeps_the_choice_its_load_renders_once_checked(self):
+        # --prepare renders nothing: the choice given with it was dropped, and its Load served the native window with no
+        # word of it (second review of v1.45.2); then it kept one a checkpoint already in the cache refuses (third)
+        text = (REPO / "install-flash-local.sh").read_text()
+        block = text[text.index('if [ "$MODE" = prepare ]; then'):]
+        block = block[:block.index("\nfi\n") + 4].replace("exit 0", ":")
+        moved = json.loads(json.dumps(self.CONFIG))
+        moved["text_config"]["rope_parameters"]["mrope_section"] = [16, 24, 24]
+        (self.snap / "config.json").write_text(json.dumps(moved))
+        rc, out = self.run_lines("prepare", block, FLASH_LOCAL_CONTEXT="1m")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("RoPE is not the one the 1M window was measured on", out)
+        self.assertFalse((self.cfg / "flash-local-context").exists())
+        (self.snap / "config.json").write_text(json.dumps(self.CONFIG))
+        rc, out = self.run_lines("prepare", block, FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((self.cfg / "flash-local-context").read_text(), "1m\n")
+        (self.snap / "config.json").unlink()                         # not fetched yet: kept, its Load checks it
+        (self.cfg / "flash-local-context").unlink()
+        rc, out = self.run_lines("prepare", block, FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual((rc, (self.cfg / "flash-local-context").read_text()), (0, "1m\n"), out)
+
+    def test_a_fault_is_not_taken_for_the_checkpoints_refusal(self):
+        # a kept choice whose overrides cannot be written (a config that does not parse, a disk full) served the native
+        # window and said the checkpoint had refused it (third review of v1.45.2): the Load stops and says the fault
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_CONTEXT="1m")
+        self.assertEqual((rc, self.window()), (0, "1048576"), out)
+        (self.snap / "config.json").write_text("{ not json")
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")          # a Load
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("could not be written", out)
+        self.assertNotIn("is off for this checkpoint", out)
+
+    def test_the_pinned_checkpoint_is_the_one_measured(self):
+        # the real pinned config, where the box has it: the RoPE the 1M window was measured on (2026-11-09)
+        real = pathlib.Path.home() / ".cache/huggingface/hub" / HUB / "snapshots" / PINS["FLASH_LOCAL_REV"] / "config.json"
+        if not real.exists():
+            # a reason the CI lists (ci.yml): the runner never has the checkpoint, the reference box does
+            self.skipTest("needs the pinned bytes cached (the FP4-Local checkpoint's config.json at its pinned revision)")
+        t = json.loads(real.read_text())["text_config"]
+        self.assertEqual(t["max_position_embeddings"], 262144)
+        self.assertEqual({k: t["rope_parameters"][k] for k in self.CONFIG["text_config"]["rope_parameters"]},
+                         self.CONFIG["text_config"]["rope_parameters"])
+
+class TheLoadSetsTheClientsForTheWindow(unittest.TestCase):
+    """A Load of the FP4-Local lane gives opencode (and through its config pi and claude-local) the pair of the window its
+    unit runs (FLASH_LOCAL_CONTEXT=1m, v1.45.2). It added the provider when it was missing and never touched one already
+    there: a Load to 1M kept 205,000 under a compaction block sized for 840,000, and a Load back kept 840,000 against a
+    proxy that refuses past 250,000 (second review of v1.45.2). switch-model.sh's own block runs here, on copies of the
+    two configs, with a systemctl that answers nothing and a sudo that is never reached."""
+
+    def setUp(self):
+        self.d = pathlib.Path(tempfile.mkdtemp(prefix="fl-load-oc-"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.cfg = self.d / "cfg"
+        self.home = self.d / "home"
+        (self.home / ".config" / "opencode").mkdir(parents=True)
+        self.cfg.mkdir()
+        (self.cfg / "api-key").write_text("k\n")
+        self.bin = self.d / "bin"
+        self.bin.mkdir()
+        for tool in ("systemctl", "sudo"):
+            (self.bin / tool).write_text("#!/bin/sh\nexit 1\n")
+            (self.bin / tool).chmod(0o755)
+        gen = subprocess.run([sys.executable, str(REPO / "oc-flash-local.py"), "http://127.0.0.1:30001/v1",
+                              str(self.cfg / "api-key"), "205000", "32000",
+                              "Qwen3.8-Flash-Next FP4-Local NVIDIA + MTP (local, 262K)"],
+                             capture_output=True, text=True, check=True)
+        base = {"model": "qwen38/qwen3.8-27b", "compaction": {"preserve_recent_tokens": 46000, "prune": False},
+                "provider": {"qwen38": {"models": {"qwen3.8-27b": {
+                    "name": "x", "limit": {"context": 547000, "input": 547000, "output": 182000}}}},
+                             **json.loads(gen.stdout)["provider"]}}
+        self.configs = (self.cfg / "opencode.json", self.home / ".config" / "opencode" / "opencode.json")
+        for c in self.configs:
+            c.write_text(json.dumps(base, indent=2) + "\n")
+        text = (REPO / "switch-model.sh").read_text()
+        start = text.rindex('  if [ -f "$CONFIG_DIR/opencode.off" ]; then', 0, text.index("FLL_OC_SUM="))
+        end = text.index('  echo "Clients reach it through the proxy on :30001 with the box\'s key, as model qwen3.8-flash-next-fp4."')
+        self.block = text[start:end].replace("/etc/systemd/system/qwen38-keepalive.service", str(self.d / "keepalive.service"))
+
+    def load(self, window):
+        unit = self.d / "qwen38-flash-local.service"
+        unit.write_text(f"ExecStart=/bin/bash -c 'exec docker run x vllm serve m \\\n    --max-model-len {window} --max-num-seqs 8'\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'CONFIG_DIR="{self.cfg}"',
+                            f'FLASH_LOCAL_UNIT="{unit}"', self.block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": f"{self.bin}:/usr/bin:/bin", "HOME": str(self.home)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("NOTE", r.stdout + r.stderr)
+        return [json.loads(c.read_text()) for c in self.configs]
+
+    def test_a_load_to_1m_and_back_moves_the_limits_of_the_entry_already_there(self):
+        for window, ctx, label in ((1048576, 840000, "(local, 1M)"), (262144, 205000, "(local, 262K)")):
+            keep = int(subprocess.run(["bash", str(REPO / "oc-limits.sh"), "--preserve", str(ctx)],
+                                      capture_output=True, text=True, check=True).stdout)
+            for c in self.load(window):
+                with self.subTest(window=window):
+                    m = c["provider"]["flash-local"]["models"]["qwen3.8-flash-next-fp4"]
+                    self.assertEqual(m["limit"], {"context": ctx, "input": ctx, "output": 32000})
+                    self.assertTrue(m["name"].endswith(label), m["name"])
+                    self.assertEqual(c["model"], "flash-local/qwen3.8-flash-next-fp4")
+                    self.assertEqual(c["compaction"]["preserve_recent_tokens"], keep)
+                    self.assertLess(keep, ctx - 20000, "a compaction keeps less than its threshold")
+
+
+class TheInstallSetsTheClientsForTheWindow(unittest.TestCase):
+    """install.sh's own blocks: the user's opencode config gets the FP4-Local pair of the unit's window, as the compaction
+    block it merges is sized from that pair when the lane boots, and FLASH_LOCAL_CONTEXT is not read there, which would
+    have reached the unit and not the clients sized before it (second review of v1.45.2)."""
+    TEXT = (REPO / "install.sh").read_text()
+
+    def test_the_users_config_takes_the_fp4_local_pair(self):
+        start = self.TEXT.index('if [ -f "$OC_USER_CFG" ]; then\n  if [ "${LANE:-27b}" = "flash" ]; then')
+        block = self.TEXT[start:self.TEXT.index("# The default model and the served entry's picker name follow the install", start)]
+        d = pathlib.Path(tempfile.mkdtemp(prefix="fl-install-oc-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = d / "opencode.json"
+        cfg.write_text(json.dumps({"provider": {
+            "qwen38": {"models": {"qwen3.8-27b": {"limit": {"context": 547000, "input": 547000, "output": 182000}}}},
+            "flash-local": {"models": {"qwen3.8-flash-next-fp4": {
+                "limit": {"context": 205000, "input": 205000, "output": 32000}}}}}}, indent=2) + "\n")
+        script = "\n".join(["set -uo pipefail", f'REPO_DIR="{REPO}"', f'OC_USER_CFG="{cfg}"', "LANE=27b",
+                            "OC_CTX=547000 OC_OUT=182000 OC_KEEP=205000 CONTEXT_MODE=1m _ENV_CONTEXT_MODE= MEM_CLASS=128",
+                            f'SGL_UNIT_PATH="{d}/none.service"', "OC_FLASH_LOCAL=1 OC_FLASH_LOCAL_CTX=840000 OC_FLASH_LOCAL_OUT=32000",
+                            block])
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(d)})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        c = json.loads(cfg.read_text())
+        self.assertEqual(c["provider"]["flash-local"]["models"]["qwen3.8-flash-next-fp4"]["limit"],
+                         {"context": 840000, "input": 840000, "output": 32000})
+        self.assertEqual(c["compaction"]["preserve_recent_tokens"], 205000)
+
+    def test_flash_local_context_is_not_read_by_the_install(self):
+        start = self.TEXT.index('if [ -n "${FLASH_LOCAL_CONTEXT+set}" ]; then')
+        block = self.TEXT[start:self.TEXT.index("\nfi\n", start) + 4]
+        self.assertLess(start, self.TEXT.index("install-flash-local.sh\" \"$(side_mode"))
+        r = subprocess.run(["bash", "-c", block + 'echo "after=${FLASH_LOCAL_CONTEXT-unset}"'], capture_output=True,
+                           text=True, timeout=30, env={"PATH": "/usr/bin:/bin", "FLASH_LOCAL_CONTEXT": "1m"})
+        self.assertIn("FLASH_LOCAL_CONTEXT=1m ./install-flash-local.sh --units-only", r.stdout)
+        self.assertIn("after=unset", r.stdout)
 
 
 if __name__ == "__main__":

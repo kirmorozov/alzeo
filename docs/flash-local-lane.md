@@ -1,4 +1,4 @@
-# The Flash FP4-Local lane: NVIDIA's FP4 build of Qwen3.8-Flash-Next, on vLLM
+# The Qwen3.8 Flash-Next FP4-Local lane: NVIDIA's FP4 build of Qwen3.8-Flash-Next, on vLLM
 
 `nvidia/Qwen3.8-Flash-Next-FP4-Local` is NVIDIA's own build of Qwen3.8-Flash-Next for one local
 GPU, released on Hugging Face on 2026-10-05: its experts in NVFP4 and its other layers in MXFP8,
@@ -21,7 +21,7 @@ NVMe) on 2026-10-19 and 20, with the scripts and their raw output kept beside th
 
 ## The two flash lanes side by side
 
-| | flash (SGLang, RadixArk's export) | Flash FP4-Local (vLLM, NVIDIA's build) |
+| | flash (SGLang, RadixArk's export) | Qwen3.8 Flash-Next FP4-Local (vLLM, NVIDIA's build) |
 |---|---|---|
 | checkpoint on disk | 135.3 GB | 102.3 GB |
 | n-gram table | FP8, 47.7 GiB, written beside the home directory at every boot | NVFP4, 26.8 GiB, read in place from the checkpoint's files |
@@ -280,10 +280,47 @@ Machine view counts the refusals of the last hour.
   fit), and stopping the lane stops its generations.
 - System One (`/v1/systemone`) answers on the SGLang lanes only: this lane serves on vLLM, and the
   endpoint says to load one of them.
-- A 1M window: the model's own window is 262,144 tokens, which this lane serves whole, as the
-  card's command for a DGX Spark does. The card says it extends to 1,000,000 tokens and gives no
-  recipe for it: a window stretched by YaRN is a study of its own (the 27B lane's,
-  `docs/context-1m.md`), not done for this lane yet.
+- No 1M window by default: the model's own window is 262,144 tokens, which this lane serves whole,
+  as the card's command for a DGX Spark does. A window of 1,048,576 is an option, below.
+
+## A window of 1,048,576 tokens: FLASH_LOCAL_CONTEXT=1m
+
+The card says the model extends to 1,000,000 tokens and gives no recipe for it (discussion #63
+asked). Measured on the reference box on 2026-11-09, with this lane's own image, flags and memory
+share, plus YaRN, a factor of 4 over the native 262,144 with the model's multimodal RoPE kept
+(`mrope_section` and `mrope_interleaved` as the checkpoint has them), and `--max-model-len 1048576`:
+
+| | measured |
+|---|---|
+| ready in | 406 s |
+| KV pool | 1,061,819 tokens, room for one request of 1,048,576 |
+| a passphrase hidden in filler, two trials at each depth | 8 of 8 retrieved: at 131K, 262K, 524K and 1,036,576 tokens |
+| time to the first token | 58 s at 131K, 122 s at 262K, 268 s at 524K, 608 s at 1.04M (about 1,700 tokens a second) |
+| memory available, lowest during the longest prompt | 15.1 GiB |
+| GSM8K, 250 questions, 8 at a time (short prompts) | 97.6 % with YaRN, 96.8 % at the native window: the same within the noise, at the same speed |
+
+```bash
+cd ~/dgx-spark-qwen38 && FLASH_LOCAL_CONTEXT=1m ./install-flash-local.sh --units-only      # then Load the lane
+cd ~/dgx-spark-qwen38 && FLASH_LOCAL_CONTEXT=native ./install-flash-local.sh --units-only  # back to 262,144
+```
+
+`--units-only` writes the choice and the lane's unit, and downloads and starts nothing: the next Load
+of the lane, from the cockpit or `./switch-model.sh flash-local`, starts it with the window chosen and
+sets the clients' limits for it. An update keeps the window chosen: `./install.sh` does not read
+`FLASH_LOCAL_CONTEXT`, and says so.
+
+The choice is kept for the Loads after (a Load from the cockpit stages the unit with none of your
+environment). The unit reads its overrides from `~/.config/qwen38/flash-local-yarn.json` at its
+start, written from the pinned checkpoint's own RoPE, and the installer refuses the option when
+that RoPE is not the one measured, and keeps nothing of it then. A choice kept from before that a
+checkpoint refuses so serves the native window, and the Load says why. Before the checkpoint is in
+the cache, the unit keeps the native window: the Load that fetches it sets the 1M one.
+
+At 1M, the proxy relays a prompt up to 92 % of the pool (about 976,000 tokens): the 250,000-token
+ceiling it keeps on this lane at its native window is for that window. The Load gives opencode, pi
+and `claude-local` a context of 840,000 tokens and 32,000 for the answer, which fit a pool 10 %
+smaller than the one measured, and the cockpit's Lanes and Now views say 1M tokens of context.
+It is not the default: its makers ship 262,144, and the 1M window is measured here on retrieval and on GSM8K only.
 
 ## Installing, loading, removing
 
@@ -293,7 +330,7 @@ table's copies when they are needed, and starts it: 17 to 19 minutes for the fir
 kernels for this GPU, about 5 min 30 s after. From a terminal: `./prepare-lane.sh flash-local` the
 first time, then `./switch-model.sh flash-local`. `--with-flash-local` installs it whole at install
 time and proves it, `--no-flash-local` leaves it out of that run, and `./install-flash-local.sh
---uninstall` removes its unit, its caches, its patched template, its filter, its check of its files,
+--uninstall` removes its unit, its caches, its patched template, its filter (kept while the Ornith 1.5 122B lane, which reads it too, is installed), its check of its files,
 its image's pin tag and the table's copies. The image and the checkpoint stay, and it prints how to
 delete them.
 

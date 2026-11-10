@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keepalive proxy in front of SGLang or vLLM (v6.53). No content logging, and the only
+"""Keepalive proxy in front of SGLang or vLLM (v6.54). No content logging, and the only
 rewriting is the tool-schema guard (role 4); two routes, POST /v1/systemone (role 5) and the
 operator's POST /proxy/stop (role 7), are answered here instead of relayed.
 
@@ -59,6 +59,10 @@ Ten roles, nothing else:
    lists every box's models (see "Two boxes behind one endpoint" below). A model both boxes serve is
    shared: a conversation stays on the box that holds its prefix, a new one goes to the box with the
    fewest requests in flight (v6.52, docs/pair.md).
+
+v6.54: the Qwen3.8 Flash-Next FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2) has no flash ceiling:
+its engine's window, read on /v1/models with the names it serves (served_window), says so, and its prompts are bounded
+by the pool's share (wide_fp4_local).
 
 v6.53: an SSE answer's end is read as its engine sends it, whatever its client's pace (v1.44.0, decisions 1106 to
 1109). The thread that reads the engine never waits for the one that writes the client: the answer waits in a spool
@@ -845,9 +849,21 @@ def lane_ceiling():
             served = set(served_models())
         except EngineUnreachable:
             served = set()
-        if not served or served & FLASH_SERVED_NAMES:
+        if not served or (served & FLASH_SERVED_NAMES and not wide_fp4_local(served)):
             ceiling = FLASH_PROMPT_CEILING_TOKENS if ceiling <= 0 else min(ceiling, FLASH_PROMPT_CEILING_TOKENS)
     return ceiling
+
+
+def wide_fp4_local(served):
+    """True when what serves is the FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2), which its
+    engine says on /v1/models with the names just read (max_model_len past the native 262,144, served_window), as the
+    cockpit and oc-fit-limits.py read it: measured to 1,036,576 tokens with 15.1 GiB of memory left (2026-11-09), its
+    prompts are bounded by the pool's share, not by the flash ceiling, which kept a long prefill of the SGLang flash
+    lane off the memory edge. The flash ceiling refused every prompt past 250,000 at that window (code review of
+    v1.45.2)."""
+    if not served & QWEN_VLLM_NAMES or served & (FLASH_SERVED_NAMES - QWEN_VLLM_NAMES):
+        return False
+    return (_SERVED.get("window") or 0) > 262144
 
 
 def wedge_possible(pool):
@@ -2279,7 +2295,7 @@ def invalidate_pool():
     drops the cache.
     """
     _POOL.update(tokens=None, window=None, ts=0.0)
-    _SERVED.update(names=(), engine="", ts=0.0)  # v6.19: the served model names are the same kind of fact
+    _SERVED.update(names=(), engine="", window=0, ts=0.0)  # v6.19: the served model names are the same kind of fact
     _INFO_ROUTE["path"] = "/server_info"  # v6.23: a new engine gets the current route first
 
 
@@ -2388,12 +2404,7 @@ def vllm_pool_facts(metrics_text, models):
                 pool = int(labels.get("num_gpu_blocks") or 0) * int(labels.get("block_size") or 0)
             except ValueError:
                 pool = 0
-    window = 0
-    for row in models or []:
-        if isinstance(row, dict) and isinstance(row.get("max_model_len"), int):
-            window = row["max_model_len"]
-            break
-    return pool, window
+    return pool, served_window(models)
 
 
 def _vllm_facts(key, timeout):
@@ -2409,7 +2420,7 @@ def _vllm_facts(key, timeout):
         owner = owner if isinstance(owner, str) else ""
         names = tuple(m["id"] for m in rows)
         note_engine(names, owner)
-        _SERVED.update(names=names, engine=owner, ts=time.time())
+        _SERVED.update(names=names, engine=owner, window=served_window(rows), ts=time.time())
     return vllm_pool_facts(text, models)
 
 
@@ -3334,7 +3345,7 @@ def systemone_answer(question, probabilities):
             "legend": {key: desc for key, desc in options}, "probabilities": dist}
 
 
-_SERVED = {"names": (), "engine": "", "ts": 0.0}
+_SERVED = {"names": (), "engine": "", "ts": 0.0, "window": 0}
 
 
 def served_models():
@@ -3357,16 +3368,26 @@ def served_models():
             owner = rows[0].get("owned_by")
             owner = owner if isinstance(owner, str) else ""
             note_engine(tuple(ids), owner)
-            _SERVED.update(names=tuple(ids), engine=owner, ts=time.time())
+            _SERVED.update(names=tuple(ids), engine=owner, window=served_window(rows), ts=time.time())
     except urllib.error.HTTPError:
-        _SERVED.update(names=(), engine="", ts=0.0)   # it answered, just not with a list of names
+        _SERVED.update(names=(), engine="", window=0, ts=0.0)   # it answered, just not with a list of names
     except (urllib.error.URLError, OSError) as e:
         # Nothing on the other end: that is the relay path's 503, not "the lane is shy".
-        _SERVED.update(names=(), engine="", ts=0.0)
+        _SERVED.update(names=(), engine="", window=0, ts=0.0)
         raise EngineUnreachable(str(getattr(e, "reason", None) or e)) from e
     except Exception:
-        _SERVED.update(names=(), engine="", ts=0.0)
+        _SERVED.update(names=(), engine="", window=0, ts=0.0)
     return _SERVED["names"]
+
+
+def served_window(rows) -> int:
+    """The window the engine says on /v1/models (max_model_len, which vLLM gives): the first row that says one, 0 when
+    none does. Read with the names, so the one-prompt ceiling decides on the list it was read with (v6.54), and the one
+    reader of it here (vllm_pool_facts reads the window through it too)."""
+    for row in rows or []:
+        if isinstance(row, dict) and isinstance(row.get("max_model_len"), int):
+            return max(0, row["max_model_len"])
+    return 0
 
 
 # v6.37: the last engine that named itself, kept across invalidate_pool (which also runs when
@@ -9191,7 +9212,7 @@ if __name__ == "__main__":
     holds = (f"holds requests up to {HOLD_MAX_S:.0f}s while {' or '.join(HOLD_UNITS)} comes back"
              if HOLD_UNITS and HOLD_MAX_S > 0 else "holds nothing")
     # one f-string: the cockpit's tests render this line from the source
-    log(f"v6.53 on {BIND}:{port} -> {UPSTREAM} (keepalive {KEEPALIVE_S:.0f}s, max silence {MAX_SILENCE_S:.0f}s, {holds})")
+    log(f"v6.54 on {BIND}:{port} -> {UPSTREAM} (keepalive {KEEPALIVE_S:.0f}s, max silence {MAX_SILENCE_S:.0f}s, {holds})")
     # v6.47: what the memory floor's refusal reads, read once here, so the journal shows it works where
     # the unit runs this proxy (its sandbox leaves /proc/meminfo readable)
     avail = mem_available_gib()

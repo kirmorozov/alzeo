@@ -1,7 +1,7 @@
 # When an engine stops: what the box does, measured
 
 An engine that dies is started again by systemd, and a boot takes minutes: about 7.5 on the
-27B lane and 11 on the flash lane in the runs below (the README gives 5 to 9 and 12 to 15).
+27B lane and 11 on the flash lane in the runs below (the README gives 3.5 to 9 and 12 to 15).
 This page says what happens in that time, to the box and to
 the clients, and what v1.21.0 added so that a restart can neither freeze the machine nor end
 an agent's session. Every number here was measured on the reference box (DGX Spark, driver
@@ -30,11 +30,12 @@ does.
 
 ## The start guard (`engine-preflight.sh`)
 
-Every engine unit (27B, flash, image, video) runs it before its engine. It waits up to 60 s
+Every engine unit (the 27B, the flash lane, the five vLLM lanes, image and video) runs it before its engine. It waits up to 60 s
 and refuses the start while it finds:
 
-- **GPU memory still held by what is left of an engine**: an SGLang process (its title is
-  `sglang::<part>` or its command line names sglang), or a process the driver still lists and
+- **GPU memory still held by what is left of an engine**: an engine process (SGLang's title is
+  `sglang::<part>` or its command line names sglang; vLLM's engine core is `VLLM::EngineCore` and
+  its API server a command line running `vllm serve`), or a process the driver still lists and
   the system no longer has, holding more than 2 GiB;
 - **memory the driver keeps that no process accounts for**: on this unified-memory machine a
   GPU allocation is in none of the kernel's own categories, so MemTotal minus all of them is
@@ -69,7 +70,7 @@ GPU** with the reason:
 preflight: qwen38-flash.service cannot start: the GPU's addressing mode is None (nvidia-smi --query-gpu=addressing_mode) and the flash lane needs ATS: ...
 ```
 
-The Flash FP4-Local unit then asks whether what its engine reads is there
+The Qwen3.8 Flash-Next FP4-Local unit then asks whether what its engine reads is there
 (`flash-local-files.sh`, the head of its `ExecStart`, after the guard above): its checkpoint at the pinned revision,
 its index and every file the index names (a fetch cut short leaves the index first), and the copies of
 its n-gram table, each of its original's size, when the cache is on another disk
@@ -97,7 +98,7 @@ engines, with the real clients:
 | Claude Code 2.1.286 (`claude-qwen`) | 11 attempts, 30 to 38 s apart, then fails at 325 s | waits, takes the answer, 1 request | sends it again without streaming |
 
 So every engine restart ended every session it caught, in both clients. Now a request that finds the
-engine not answering, while `qwen38-sglang.service` or `qwen38-flash.service` is starting,
+engine not answering, while one of the seven text lanes' units is starting,
 waiting for its next attempt, up, or in the stop half of a restart (the unit "deactivating"
 under a `restart` job), waits for it (`PROXY_HOLD_UNITS`, at most `PROXY_HOLD_MAX_S`, 1200 s,
 both in the proxy's unit):
@@ -131,7 +132,7 @@ The same units tell the proxy that the engine behind it is a new one. What it re
 engine (the KV pool, the longest prompt the engine accepts, the model names it serves) it keeps
 600 s, and until v1.22.14 only a request that found the engine gone dropped them: after a lane
 switch made while no request came, a lane that boots in less than those 600 s served its first
-minutes under the stopped lane's (the 27B boots in about 7 min on the reference box: for up to
+minutes under the stopped lane's (the 27B booted in about 7 min on the reference box then: for up to
 2.5 min it refused every prompt past the flash lane's 250,000-token ceiling, and `/v1/systemone`
 answered as the flash), and a restart of the 27B kept the pool of the boot before. systemd
 gives every start of a unit a new invocation id; the proxy asks for the ids of

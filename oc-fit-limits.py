@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fit the opencode limits to the engine that is actually serving.
 
-Usage: oc-fit-limits.py [--dry-run] [--restart-agent] [--engine http://127.0.0.1:30000]
+Usage: oc-fit-limits.py [--dry-run] [--restart-agent | --restart-agent-if-lowered] [--engine http://127.0.0.1:30000]
 
 opencode's `limit.context` is what it grows a conversation up to before it
 compacts, and `limit.output` is what it asks the engine to generate. Both are
@@ -21,6 +21,7 @@ generated artifact and the config opencode really reads, through
 oc-merge-limits.py, and does nothing at all when the integration is off.
 """
 import json
+import re
 import os
 import subprocess
 import sys
@@ -168,7 +169,7 @@ def fit(pool: int, ceiling: int = 0, window: int = 0,
 FLASH_SERVED_NAMES = ("qwen3.8-flash-next", "qwen3.8-flash-next-fp4")
 
 
-def ceiling_from_env(text: str, served=None) -> int:
+def ceiling_from_env(text: str, served=None, window: int = 0) -> int:
     """The one-prompt ceiling the proxy applies to the `served` model, out of
     `systemctl show -p Environment` output: PROMPT_CEILING_TOKENS on any lane, and
     FLASH_PROMPT_CEILING_TOKENS while the flash lane serves (v6.25), the proxy's own rule
@@ -193,7 +194,10 @@ def ceiling_from_env(text: str, served=None) -> int:
                     values[key] = 0
     ceiling = values.get("PROMPT_CEILING_TOKENS", 0)
     flash = values.get("FLASH_PROMPT_CEILING_TOKENS", 0)
-    if flash > 0 and (not served or served in FLASH_SERVED_NAMES):
+    # the FP4-Local lane at its 1M window (FLASH_LOCAL_CONTEXT=1m, v1.45.2) gets no flash ceiling, as the proxy decides
+    # (wide_fp4_local): its engine's window says so
+    wide = served == "qwen3.8-flash-next-fp4" and window > 262144
+    if flash > 0 and (not served or served in FLASH_SERVED_NAMES) and not wide:
         ceiling = flash if ceiling <= 0 else min(ceiling, flash)
     return ceiling
 
@@ -201,6 +205,11 @@ def ceiling_from_env(text: str, served=None) -> int:
 def main(argv: list[str]) -> int:
     dry = "--dry-run" in argv
     restart = "--restart-agent" in argv
+    # the installer's: the Agent tab's server is restarted only when a limit had to come DOWN. Limits lower than the
+    # pool allows still fit, and a restart ends the turn the Agent tab is in: every update cut it, its fit raising the
+    # limits a smaller pool of an earlier boot had set (the reference box, v1.44.3, 2026-11-08: 498000/166000 ->
+    # 555000/185000). The server reads the higher ones at its next start
+    restart_lowered = "--restart-agent-if-lowered" in argv
     base = "http://127.0.0.1:30000"
     if "--engine" in argv:
         base = argv[argv.index("--engine") + 1]
@@ -221,8 +230,8 @@ def main(argv: list[str]) -> int:
         return 1
     env = subprocess.run(["systemctl", "show", "qwen38-keepalive.service", "-p", "Environment"],
                          capture_output=True, text=True).stdout
-    ceiling = ceiling_from_env(env, served)
     window = int(info.get("context_length") or 0)
+    ceiling = ceiling_from_env(env, served, window)
     cap = lane_cap(served) if 0 < window <= NATIVE_WINDOW else None
     context, output = fit(pool, ceiling, window, cap)
     # Rounding to the kilo bottoms out at zero on an implausibly small pool, and
@@ -248,7 +257,7 @@ def main(argv: list[str]) -> int:
     # new threshold instead of a quarter (found in review, 2026-09-24).
     keep = subprocess.run([str(REPO_DIR / "oc-limits.sh"), "--preserve", str(context)],
                           capture_output=True, text=True).stdout.strip()
-    rc, changed, merged = 0, False, False
+    rc, changed, merged, lowered = 0, False, False, False
     for target in (CONFIG_DIR / "opencode.json", Path.home() / ".config/opencode/opencode.json"):
         if not target.exists():
             continue
@@ -264,6 +273,13 @@ def main(argv: list[str]) -> int:
             continue                              # this config has no entry for the lane
         merged = True
         changed = changed or "unchanged" not in said
+        m = re.search(r"limits: (\d+)/(\d+) -> (\d+)/(\d+)", said)
+        # a pair it did not have before ("limits: None/None -> ..."), one that came down, or the same pair said again,
+        # which means another key of the block was rewritten: its input, which can only come down to the context (the
+        # merge sets input to it), unseen in this line (review of v1.45.1)
+        if "unchanged" not in said:
+            a, b, c, d = (int(g) for g in m.groups()) if m else (0, 0, 0, 0)
+            lowered = lowered or not m or c < a or d < b or (c, d) == (a, b)
         if keep.isdigit() and int(keep) > 0:
             out = subprocess.run([sys.executable, str(REPO_DIR / "oc-merge-limits.py"), str(target),
                                   "--compaction", keep], capture_output=True, text=True)
@@ -279,9 +295,13 @@ def main(argv: list[str]) -> int:
         print(f"no opencode config here has an entry for {provider}/{served}: nothing fitted")
     elif rc == 0 and not changed:
         print("opencode already asks for no more than this engine can serve: nothing to restart")
-    elif rc == 0 and restart:
+    elif rc == 0 and (restart or (restart_lowered and lowered)):
         print("opencode now asks for no more than this engine can serve")
         print(restart_agent())
+    elif rc == 0 and restart_lowered:
+        # said as it is: the server may not run, and the change may be the compaction block alone (review of v1.45.1)
+        print("opencode now asks for no more than this engine can serve; the Agent tab's server, if it runs, keeps "
+              "what it read at its start, which still fits: it reads the new settings at its next start")
     elif rc == 0:
         print("opencode now asks for no more than this engine can serve; "
               "restart opencode to pick the new limits up")
