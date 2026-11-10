@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import struct
 import time
 
@@ -84,3 +85,32 @@ def read_frame(path: str) -> tuple[bytes | None, float]:
     if whole(data) is None:
         return None, 0.0
     return data, max(0.0, time.time() - st.st_mtime)
+
+
+# The shape the plugin's meta carries (flash_local_experts.counter.model_meta), as the checkpoint's
+# config.json names it: what the Experts view draws before an engine with the counter writes.
+SHAPE_KEYS = ("model_type", "num_hidden_layers", "layer_types", "full_attention_interval", "hidden_size",
+              "num_attention_heads", "num_key_value_heads", "num_experts", "num_experts_per_tok",
+              "moe_intermediate_size", "shared_expert_intermediate_size", "hc_count", "ple_layer_ids",
+              "mtp_num_hidden_layers", "vocab_size")
+SPEC_FLAGS = (("spec_method", r"--speculative-config\.method\s+(\S+)", str),
+              ("num_speculative_tokens", r"--speculative-config\.num_speculative_tokens\s+(\d+)", int),
+              ("draft_model", r"--speculative-config\.model\s+(\S+)", str))
+
+
+def shape(cfg: dict, unit_text: str = "") -> dict:
+    """The model's shape for the drawing, off the checkpoint's config.json (its text_config where
+    it has one) and the drafter off the unit's flags, every field optional: the layers, the
+    experts and the heads the view lays out while the engine writes no counter yet."""
+    tc = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else cfg
+    out: dict = {}
+    for k in SHAPE_KEYS:
+        v = tc.get(k, cfg.get(k))
+        if isinstance(v, (list, tuple)):
+            v = [x for x in v if isinstance(x, (int, float, str))]
+        if v is not None and isinstance(v, (int, float, str, list)):
+            out[k] = v
+    for k, pat, conv in SPEC_FLAGS:
+        m = re.search(pat, unit_text or "")
+        out[k] = conv(m.group(1)) if m else None
+    return out

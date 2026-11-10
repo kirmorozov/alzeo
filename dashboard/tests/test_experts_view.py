@@ -135,6 +135,42 @@ class TheCollector(Base):
         self.assertEqual((d["present"], d["live"]), (True, False))
         self.assertGreater(d["age"], 50)
 
+    def test_without_a_counter_the_shape_is_the_lanes_checkpoint_and_the_units_drafter(self):
+        rev = "b" * 40
+        snap = self.tmp / "hf/hub/models--nvidia--Qwen-Test/snapshots" / rev
+        snap.mkdir(parents=True, exist_ok=True)
+        (snap / "config.json").write_text(json.dumps({"model_type": "qwen4_exp", "text_config": {
+            k: v for k, v in META.items() if k not in ("rows", "spec_method", "num_speculative_tokens", "served_model_name")}}))
+        unit = self.tmp / "qwen38-flash-local.service"
+        unit.write_text(f"ExecStart=docker run -v {self.tmp}/hf:/root/.cache/huggingface x vllm serve nvidia/Qwen-Test --revision {rev} "
+                        "--speculative-config.method dflash --speculative-config.model incoai/Draft --speculative-config.num_speculative_tokens 4\n")
+        before = self.ck.FLASH_LOCAL_UNIT_PATH
+        self.ck.FLASH_LOCAL_UNIT_PATH = unit
+        try:
+            self.ck._SHAPE_CACHE.clear()
+            d = self.ck.collect_experts()
+            sh = d["shape"]
+            self.assertEqual((d["present"], sh["num_hidden_layers"], sh["layer_types"], sh["num_experts"], sh["num_experts_per_tok"], sh["ple_layer_ids"], sh["hc_count"]),
+                             (False, 4, META["layer_types"], 8, 2, [2], 4))
+            self.assertEqual((sh["spec_method"], sh["num_speculative_tokens"], sh["draft_model"]), ("dflash", 4, "incoai/Draft"))
+            self.assertIs(self.ck.collect_experts()["shape"], sh, "read once per config file and unit")
+            unit.write_text(unit.read_text().replace("method dflash", "method mtp"))
+            self.assertEqual(self.ck.collect_experts()["shape"]["spec_method"], "mtp", "a new unit text is read again")
+            self.file.write_bytes(frame([0] * 40))
+            self.assertNotIn("shape", self.ck.collect_experts(), "a counter that writes carries the shape itself")
+        finally:
+            self.ck.FLASH_LOCAL_UNIT_PATH = before
+            self.ck._SHAPE_CACHE.clear()
+
+    def test_without_the_lanes_unit_there_is_no_shape_and_no_error(self):
+        before = self.ck.FLASH_LOCAL_UNIT_PATH
+        self.ck.FLASH_LOCAL_UNIT_PATH = self.tmp / "no-such-unit"
+        try:
+            d = self.ck.collect_experts()
+        finally:
+            self.ck.FLASH_LOCAL_UNIT_PATH = before
+        self.assertEqual((d["present"], d["shape"]), (False, None))
+
     def test_a_foreign_file_is_no_counter_and_no_error(self):
         self.file.write_bytes(b"\xff" * 300)
         d = self.ck.collect_experts()
@@ -230,6 +266,41 @@ class ThePage(unittest.TestCase):
         self.assertEqual((r["routes"], r["tokens"], r["tps"], r["used"], r["cells"]), (12, 1.5, 1.5, 3, 32))
         self.assertEqual(r["hot"], [3, 7, 8.0], "one expert with all of a layer's routes is 8x an even share of 8")
         self.assertIsNone(r["bad"])
+
+    def test_before_the_counter_the_tiles_are_the_checkpoints_layers_unlit(self):
+        shape = {k: v for k, v in META.items() if k != "rows"}
+        r = self.run_page(r"""
+        const seen = {};
+        feed({config: CONFIG, units: UNITS, engine_info: {info: {served_model_name: 'qwen3.8-flash-next-fp4'}}, experts: {present: false, live: false, shape: %s}});
+        seen.mtp = {panel: $('ex-panel').hidden, main: EX.layout.main.length, extra: EX.layout.extra.map(L => L.kind), tps: txt('ex-tps'), note: txt('ex-empty')};
+        feed({experts: {present: false, live: false, shape: Object.assign({}, %s, {spec_method: 'dflash', draft_model: 'incoai/Draft'})}});
+        seen.dflash = {panel: $('ex-panel').hidden, extra: EX.layout.extra.length};
+        feed({experts: {present: false, live: false}});
+        seen.noShape = {panel: $('ex-panel').hidden};
+        feed({engine_info: {info: {served_model_name: 'qwen3.8-27b'}}, experts: {present: false, live: false, shape: %s}});
+        seen.otherModel = {panel: $('ex-panel').hidden};
+        report(seen);
+        """ % (json.dumps(shape), json.dumps(shape), json.dumps(shape)))
+        self.assertEqual(r["mtp"], {"panel": False, "main": 4, "extra": ["MTP head"], "tps": "…", "note": r["mtp"]["note"]})
+        self.assertIn("unlit until", r["mtp"]["note"])
+        self.assertEqual(r["dflash"], {"panel": False, "extra": 0}, "another drafter has no experts of its own")
+        self.assertEqual(r["noShape"]["panel"], True)
+        self.assertEqual(r["otherModel"]["panel"], True)
+
+    def test_the_tiles_give_each_expert_a_fixed_place(self):
+        r = self.run_page(r"""
+        const g = exGeom(1000, 512, 48, 1), n = exGeom(320, 512, 48, 0);
+        EX.geom = g; EX.layout = exSkeleton({num_hidden_layers: 48, num_experts: 512, spec_method: 'mtp'});
+        // tile 9 (second row, second column), cell column 5 of row 2: expert 2 x 32 + 5
+        const at = exCellAt(108 + 5 * 3 + 1, 26 + 72 + 14 + 2 * 3 + 1);
+        report({wide: [g.cols, g.cs, g.tileW, g.tileH, g.pos(47), g.pos(48), g.H, g.gridW], narrow: [n.cols, n.cs, n.H],
+                at, gap: exCellAt(108 - 1, 26 + 72 + 20), head: exCellAt(5, 26 + 5)});
+        """)
+        self.assertEqual(r["wide"], [8, 3, 96, 62, {"x": 756, "y": 386}, {"x": 0, "y": 482}, 588, 852])
+        self.assertEqual(r["narrow"], [2, 4, 26 + 24 * 88 + 34])
+        self.assertEqual(r["at"], {"i": 9, "e": 69})
+        self.assertIsNone(r["gap"], "between two tiles")
+        self.assertIsNone(r["head"], "a tile's head is not a cell")
 
     def test_the_poll_runs_while_the_view_is_open_and_stops_when_it_is_left(self):
         r = self.run_page(r"""

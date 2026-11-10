@@ -90,10 +90,14 @@ must divide the target's block); the split has none. Nothing changes for the MTP
 `flash-local-experts/`, mounted read-only at `/opt/experts-plugin` by its unit. It counts, per MoE layer, how many of
 the step's routed tokens went to each of the 512 experts, and writes the matrix twice a second to
 `/dev/shm/qwen38-experts.bin`, which the host reads in place since the unit runs with `--ipc=host`: no port, no
-request to the engine. The cockpit's new Experts view, in the rail between Traffic and Machine, draws it: a row per
-layer, a cell per expert, bright at four times an even share and dim below it, drawn over the stack as the engine's
-config describes it (the four hyper-connection streams, each layer's kind, GDN or QSA, the PLE layer, the embedding,
-the heads, the MTP head's own experts as a row of its own, and the draft the unit runs with). Four readouts above it:
+request to the engine. The cockpit's new Experts view, in the rail between Traffic and Machine, draws it: a tile per
+layer, the layer's 512 experts as 16 rows of 32 cells with expert 0 at the top left, so an expert sits in the same
+place in every tile and one cell lit down the stack is one expert the whole model leans on; bright at four times an
+even share and dim below it, laid out as the engine's config describes the stack (eight tiles to a row, the QSA layers
+in two columns of their own, the PLE layer marked, the embedding and the four residual streams above, the heads below,
+the MTP head's own experts as a tile of their own, and the draft the unit runs with). Before any engine writes the
+counter the view draws the same tiles unlit, from the checkpoint's config and the unit's flags, and lights them when
+the counts come. Four readouts above it:
 tokens through the experts a second, the share of experts used in the last second, what the busiest tenth of experts
 carries, and the hottest expert against an even share; a table of the eight hottest cells below; a tooltip per cell;
 and a switch between the last second and the whole run since the engine started. The view polls the file once a
