@@ -300,7 +300,8 @@ function makeWindow(tree, opts = {}){
   const fetches = [];
   const win = {
     document: doc, console, JSON, Math, Promise, Object, Array, String, Number, Boolean, RegExp, Error,
-    TypeError, Map, Set, WeakMap, Symbol, Proxy, Reflect, Uint8Array, Uint32Array, ArrayBuffer, DataView,
+    TypeError, Map, Set, WeakMap, Symbol, Proxy, Reflect, Uint8Array, Uint32Array, Int32Array, Float64Array, ArrayBuffer, DataView,
+    TextDecoder, TextEncoder, BigInt,
     parseInt, parseFloat, isNaN, isFinite, encodeURIComponent, decodeURIComponent, structuredClone,
     Date: FakeDate, Intl,
     setTimeout: (fn, ms) => addTimer(fn, ms, false), setInterval: (fn, ms) => addTimer(fn, ms, true),

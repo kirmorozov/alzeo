@@ -417,7 +417,7 @@ async function postJSON(path, body){
 }
 
 // ── router: views, the rail, the phone menu ───────────────────────────────────
-const VIEWS = ['now', 'lanes', 'traffic', 'machine', 'agent', 'decide', 'image', 'video', 'library', 'logs', 'settings'];
+const VIEWS = ['now', 'lanes', 'traffic', 'experts', 'machine', 'agent', 'decide', 'image', 'video', 'library', 'logs', 'settings'];
 // the old tab names still land: links in the docs and bookmarks say #agent, #engines
 const ALIAS = {overview: 'now', engines: 'lanes', requests: 'traffic', systemone: 'decide', models: 'library', setup: 'settings'};
 const ON_SHOW = {};

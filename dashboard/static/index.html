@@ -57,6 +57,7 @@
       <button class="nav" data-view="now" aria-label="Now"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="lab">Now</span><span class="bdg" id="bdg-now"></span></button>
       <button class="nav" data-view="lanes" aria-label="Lanes"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg><span class="lab">Lanes</span><span class="bdg" id="bdg-lanes"></span></button>
       <button class="nav" data-view="traffic" aria-label="Traffic"><svg viewBox="0 0 24 24"><path d="M4 7h13l-3-3M20 17H7l3 3"/></svg><span class="lab">Traffic</span><span class="bdg" id="bdg-traffic"></span></button>
+      <button class="nav" data-view="experts" aria-label="Experts" id="nav-experts" hidden><svg viewBox="0 0 24 24"><rect x="3" y="4" width="4" height="4"/><rect x="10" y="4" width="4" height="4"/><rect x="17" y="4" width="4" height="4"/><rect x="3" y="10" width="4" height="4"/><rect x="10" y="10" width="4" height="4"/><rect x="17" y="10" width="4" height="4"/><rect x="3" y="16" width="4" height="4"/><rect x="10" y="16" width="4" height="4"/><rect x="17" y="16" width="4" height="4"/></svg><span class="lab">Experts</span><span class="bdg" id="bdg-experts"></span></button>
       <button class="nav" data-view="machine" aria-label="Machine"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg><span class="lab">Machine</span><span class="bdg" id="bdg-machine"></span></button>
     </div>
     <div class="grp">
@@ -227,6 +228,42 @@
           </section>
         </div>
       </div>
+    </section>
+
+    <!-- ══ EXPERTS ══════════════════════════════════════════════════════════ -->
+    <section class="view" id="view-experts" aria-labelledby="h-experts">
+      <div class="vhead">
+        <div class="vhead-title"><h1 id="h-experts">Experts</h1><p>Which of Qwen Next's experts each layer routes to, as it happens: a row per layer, a cell per expert, drawn over the model's own stack.</p></div>
+        <div class="side"><span class="cap" id="ex-cap">…</span></div>
+      </div>
+      <section class="panel" data-src="experts">
+        <div class="readouts">
+          <div class="readout"><span class="v" id="ex-tps">…</span><span class="k">Tokens through the experts per second</span></div>
+          <div class="readout"><span class="v" id="ex-active">…</span><span class="k">Experts used in the last second</span></div>
+          <div class="readout"><span class="v" id="ex-top10">…</span><span class="k">Carried by the busiest tenth of experts</span></div>
+          <div class="readout"><span class="v" id="ex-hot">…</span><span class="k">Hottest expert, against an even share</span></div>
+        </div>
+        <p class="muted" id="ex-empty" style="margin-top:var(--s-4)">…</p>
+      </section>
+      <section class="panel" data-src="experts" id="ex-panel" style="margin-top:var(--s-5)" hidden>
+        <header><h2>Routing by layer</h2>
+          <div class="seg" role="radiogroup" aria-label="Window" id="ex-mode">
+            <button type="button" role="radio" aria-checked="true" data-mode="live">Last second</button>
+            <button type="button" role="radio" aria-checked="false" data-mode="total">Since the engine started</button>
+          </div>
+          <span class="aside age"></span></header>
+        <div class="ex-wrap" id="ex-wrap">
+          <canvas class="heat" id="ex-heat" role="img" aria-label="Routing heatmap: a row per layer, a cell per expert"></canvas>
+          <div class="ex-tip" id="ex-tip" role="status" hidden></div>
+        </div>
+        <p class="help" id="ex-note" style="margin-top:var(--s-3)">A cell's brightness is that expert's share of the layer's routes against an even share: dim below it, bright at four times it or more. Each token is routed to its layer's top experts at every layer, so one token is counted that many times per layer. A step padded to its CUDA graph's size routes its padding rows too, a few tokens per step on the engine's stale inputs; the picture at a glance is the same.</p>
+        <div class="scroll-x" style="margin-top:var(--s-4)">
+          <table class="tbl dense" id="ex-table">
+            <thead><tr><th>Layer</th><th>Kind</th><th class="r">Expert</th><th class="r">Tokens</th><th class="r">Against an even share</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
     </section>
 
     <!-- ══ MACHINE ══════════════════════════════════════════════════════════ -->
@@ -706,6 +743,7 @@
 <script src="/static/js/now.js" defer></script>
 <script src="/static/js/lanes.js" defer></script>
 <script src="/static/js/ops.js" defer></script>
+<script src="/static/js/experts.js" defer></script>
 <script src="/static/js/agent.js" defer></script>
 <script src="/static/js/decide.js" defer></script>
 <script src="/static/js/image.js" defer></script>

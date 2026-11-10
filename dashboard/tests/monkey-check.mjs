@@ -158,7 +158,7 @@ await goto('/');
 ok('page boots and applies a first state', await waitFor(BOOTED), 'the spine still reads "Reading the box" after 12 s');
 ok('no exception on first load', jsErrors().length === 0, jsErrors().join(' | '));
 
-const VIEWS = ['now', 'lanes', 'traffic', 'machine', 'agent', 'decide', 'image', 'video', 'library', 'logs', 'settings'];
+const VIEWS = ['now', 'lanes', 'traffic', 'experts', 'machine', 'agent', 'decide', 'image', 'video', 'library', 'logs', 'settings'];
 for (const t of VIEWS) {
   await click(`.rail .nav[data-view="${t}"]`);
   await sleep(160);

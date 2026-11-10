@@ -964,3 +964,11 @@ body.agentmax .view{animation:none}
   .serving{gap:var(--s-2)}
   .serving .what b{font-size:var(--t-13)}
 }
+
+/* ── Experts: the routing heatmap over the model's stack ─────────────────────── */
+.ex-wrap{position:relative}
+.heat{display:block; width:100%; height:auto; border-radius:var(--r-ctl); touch-action:none}
+.ex-tip{position:absolute; pointer-events:none; z-index:3; padding:6px 9px; border-radius:var(--r-ctl); font:500 var(--t-12)/1.35 var(--f-code);
+  color:var(--fg-1); background:var(--raised-hi); border:1px solid var(--rule-2); box-shadow:var(--shadow-1); white-space:nowrap}
+.panel header .seg{margin-left:auto}
+.panel header .seg + .aside{margin-left:var(--s-3)}

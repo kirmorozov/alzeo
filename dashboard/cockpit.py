@@ -38,6 +38,7 @@ from collections import deque
 import agent_relay as ar
 import engine_metrics as em
 import engines as en
+import experts as ex
 import lifecycle as lc
 import registry as rg
 import recipes as rp
@@ -49,6 +50,8 @@ CONFIG_DIR = Path(os.environ.get("COCKPIT_CONFIG_DIR", Path.home() / ".config/qw
 BIND = os.environ.get("COCKPIT_BIND", "127.0.0.1")
 PORT = int(os.environ.get("COCKPIT_PORT", "30090"))
 ENGINE_BASE = os.environ.get("COCKPIT_ENGINE", "http://127.0.0.1:30000")
+# The per-expert routing counter the flash-local lane's engine writes (dashboard/experts.py says how)
+EXPERTS_FILE = os.environ.get("COCKPIT_EXPERTS_FILE", "/dev/shm/qwen38-experts.bin")
 PROXY_BASE = os.environ.get("COCKPIT_PROXY", "http://127.0.0.1:30001")
 # Agent tab: a relay to opencode's web interface, gated by the cockpit session
 # (dashboard/agent_relay.py). Port 0 = no relay, no tab content. The bind is
@@ -246,7 +249,7 @@ def job_phrase(action: str, params: dict) -> str:
 # found on disk rather than listed, so a script added later is watched too. Each module of its own
 # this file imports is in it: engine_metrics.py was not, and a change to it alone left the old code
 # running unsaid (found adding engines.py, 2026-11-08).
-CODE_FILES = ("cockpit.py", "recipes.py", "lifecycle.py", "registry.py",
+CODE_FILES = ("cockpit.py", "recipes.py", "lifecycle.py", "registry.py", "experts.py",
               "agent_relay.py", "engine_metrics.py", "engines.py", "static/index.html") + tuple(
     "static/js/" + p.name for p in sorted((HERE / "static" / "js").glob("*.js")))
 
@@ -1480,6 +1483,18 @@ def collect_decode_telemetry():
     return {"node_id": "local", "lane": active, "decode": last,
             "usage": {"tokens": LAST_USAGE["value"], "mamba": LAST_USAGE["mamba"],
                       "age": round(time.time() - LAST_USAGE["ts"], 1) if LAST_USAGE["ts"] else None}}
+
+
+@guard
+def collect_experts():
+    """The routing counter's header, for the Experts view's rail entry, caption and readouts: whether
+    the serving engine writes one, how old its last write is, and the model's shape. The counts
+    themselves go to the view alone, by its own poll of /api/experts while it is open: 98 KB a
+    second for 48 layers x 512 experts, which the stream must not carry to every tab."""
+    out = ex.read_header(EXPERTS_FILE)
+    # a counter whose writer is gone (the engine stopped, the file stays in /dev/shm) is not live
+    out["live"] = bool(out.get("present")) and out.get("age", 1e9) < 5.0
+    return out
 
 
 FEED_CARRY: list[dict] = []        # requests in flight at the last read, for the next one
@@ -3129,7 +3144,7 @@ TIERS = [
     (1.0, {"machine": collect_machine, "engine_fast": collect_engine_fast, "job": collect_jobs}),
     (2.0, {"lifecycle": collect_lifecycle}),
     (90.0, {"canary": collect_canary}),
-    (3.0, {"gpu": collect_gpu, "decode": collect_decode_telemetry}),
+    (3.0, {"gpu": collect_gpu, "decode": collect_decode_telemetry, "experts": collect_experts}),
     (5.0, {"units": collect_units, "containers": collect_containers,
            "feed": collect_feed, "agent": collect_agent}),
     # its own thread: a /metrics read can wait its whole 4 s on an engine slow to answer,
@@ -5907,6 +5922,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json(systemone_available(max_age=0.0 if fresh else 60.0))
         if path == "/api/image":
             return self.send_json(image_status())
+        if path == "/api/experts":
+            # the counter's whole file, as the plugin wrote it (dashboard/experts.py): the view parses
+            # it in the browser, so nothing here re-encodes 98 KB a second
+            data, age = ex.read_frame(EXPERTS_FILE)
+            if data is None:
+                return self.send_json({"error": "no routing counter: the serving engine writes none"}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Experts-Age", f"{age:.1f}")
+            self.security_headers()
+            self.end_headers()
+            return self.wfile.write(data)
         if path == "/api/video":
             return self.send_json(video_status())
         if path == "/api/video/content":

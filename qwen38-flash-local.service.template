@@ -79,7 +79,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   --security-opt seccomp=__HOME__/.config/qwen38/seccomp-io-uring.json \
   -e HF_HUB_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \
   -e PYTHONDONTWRITEBYTECODE=1 -e HF_MODULES_CACHE=/tmp/hf-modules \
-  -e PYTHONPATH=/opt/qwen38-auth -e QWEN38_KEY_FILE=/out/api-key \
+  -e PYTHONPATH=/opt/qwen38-auth:/opt/experts-plugin -e QWEN38_KEY_FILE=/out/api-key \
   -e VLLM_PLE_TABLE_MEMORY=disk -e B12X_DISK_BACKEND=io_uring \
   -e CUTE_DSL_ARCH=sm_121a -e SAFETENSORS_FAST_GPU=1 \
   -e VLLM_WORKER_MULTIPROC_METHOD=spawn -e VLLM_SSM_CONV_STATE_LAYOUT=DS \
@@ -97,6 +97,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   --mount type=bind,source=__HOME__/.config/qwen38/api-key,target=/out/api-key,readonly \
   --mount type=bind,source=__HOME__/.config/qwen38/chat-template-flash-local.jinja,target=/out/chat-template-flash-local.jinja,readonly \
   -v __HOME__/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \
+  --mount type=bind,source=__HOME__/.config/qwen38/flash-local-experts,target=/opt/experts-plugin,readonly \
   __IMAGE__ \
   vllm serve __MODEL__ --revision __REV__ \
     --served-model-name qwen3.8-flash-next-fp4 \

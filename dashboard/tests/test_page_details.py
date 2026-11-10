@@ -480,11 +480,11 @@ class AnIndeterminateBarDoesNotReadFullWithoutMotion(unittest.TestCase):
 
 class TheRailsButtonsHaveNames(unittest.TestCase):
     """U29: collapsed, the rail's labels are display:none, which takes them out of the
-    buttons' accessible names: eleven unnamed buttons."""
+    buttons' accessible names: twelve unnamed buttons."""
 
     def test_every_nav_button_is_labelled(self):
         navs = re.findall(r'<button class="nav" ([^>]*)>.*?<span class="lab">([^<]+)</span>', PAGE)
-        self.assertEqual(len(navs), 11)
+        self.assertEqual(len(navs), 12)
         for attrs, lab in navs:
             with self.subTest(lab=lab):
                 self.assertIn(f'aria-label="{lab}"', attrs)

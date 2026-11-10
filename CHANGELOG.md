@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased: the cockpit's Experts view, the routing of Qwen Next's experts as it happens
+
+**A heatmap over the model's stack.** The flash-local lane's engine now carries a small vLLM plugin of this repo,
+`flash-local-experts/`, mounted read-only at `/opt/experts-plugin` by its unit. It counts, per MoE layer, how many of
+the step's routed tokens went to each of the 512 experts, and writes the matrix twice a second to
+`/dev/shm/qwen38-experts.bin`, which the host reads in place since the unit runs with `--ipc=host`: no port, no
+request to the engine. The cockpit's new Experts view, in the rail between Traffic and Machine, draws it: a row per
+layer, a cell per expert, bright at four times an even share and dim below it, drawn over the stack as the engine's
+config describes it (the four hyper-connection streams, each layer's kind, GDN or QSA, the PLE layer, the embedding,
+the heads, the MTP head's own experts as a row of its own, and the draft the unit runs with). Four readouts above it:
+tokens through the experts a second, the share of experts used in the last second, what the busiest tenth of experts
+carries, and the hottest expert against an even share; a table of the eight hottest cells below; a tooltip per cell;
+and a switch between the last second and the whole run since the engine started. The view polls the file once a
+second while it is open, and the stream carries only the file's header, so no other tab pays for the 98 KB a second.
+The rail entry is there for a Qwen Next model, or for an engine that writes the counter, and for nothing else.
+
+**What it costs the engine.** The count hooks the capture slot vLLM's MoE router already has for its own
+routed-experts feature: one `index_add_` of a preallocated ones slice into a preallocated int32 matrix per MoE layer
+per step, and one asynchronous copy of the matrix to pinned host memory per step, no allocation and no host sync on
+the hot path. The MoE runs inside the `moe_forward` custom op, which `torch.compile` leaves opaque, so the compiled
+graph and the lane's cached AOT artifact are unchanged. The writer is a daemon thread that touches CPU memory and
+the file alone. Measured against the pinned image's own torch on the reference box's CPU: 3 us a call. The kill
+switch is `QWEN38_EXPERTS=0` in the unit's environment.
+
+**What changed on disk.** `install-flash-local.sh` copies the plugin folder to `~/.config/qwen38/flash-local-experts`
+at an install and at a switch, and lists its files among what the engine reads at its start, so a copy changed under
+a serving lane is a restart owed like the unit's own changes. A lane installed before this release serves on without
+the mount until its next Load from this checkout and a restart.
+
 ## v1.46.0 (2026-11-10): the installer and the cockpit say that a star helps, and a 64 GB box's first install no longer says two false things
 
 **The one place the installer asks.** Alzeo is found by what its users say of it, and nothing in it said so. A run of
