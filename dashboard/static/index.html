@@ -233,7 +233,7 @@
     <!-- ══ EXPERTS ══════════════════════════════════════════════════════════ -->
     <section class="view" id="view-experts" aria-labelledby="h-experts">
       <div class="vhead">
-        <div class="vhead-title"><h1 id="h-experts">Experts</h1><p>Which of Qwen Next's experts each layer routes to, as it happens: a row per layer, a cell per expert, drawn over the model's own stack.</p></div>
+        <div class="vhead-title"><h1 id="h-experts">Experts</h1><p>Which of Qwen Next's experts each layer routes to, as it happens: a tile per layer, a cell per expert in the same place in every tile, laid out as the model's own stack.</p></div>
         <div class="side"><span class="cap" id="ex-cap">…</span></div>
       </div>
       <section class="panel" data-src="experts">
@@ -253,10 +253,10 @@
           </div>
           <span class="aside age"></span></header>
         <div class="ex-wrap" id="ex-wrap">
-          <canvas class="heat" id="ex-heat" role="img" aria-label="Routing heatmap: a row per layer, a cell per expert"></canvas>
+          <canvas class="heat" id="ex-heat" role="img" aria-label="Routing heatmap: a tile per layer, 32 by 16 cells, one per expert in its fixed place"></canvas>
           <div class="ex-tip" id="ex-tip" role="status" hidden></div>
         </div>
-        <p class="help" id="ex-note" style="margin-top:var(--s-3)">A cell's brightness is that expert's share of the layer's routes against an even share: dim below it, bright at four times it or more. Each token is routed to its layer's top experts at every layer, so one token is counted that many times per layer. A step padded to its CUDA graph's size routes its padding rows too, a few tokens per step on the engine's stale inputs; the picture at a glance is the same.</p>
+        <p class="help" id="ex-note" style="margin-top:var(--s-3)">Each tile is one layer's 512 experts, 32 to a row, expert 0 at the top left and 511 at the bottom right, so an expert sits in the same place in every tile. A cell's brightness is that expert's share of the layer's routes against an even share: dim below it, bright at four times it or more. Each token is routed to its layer's top experts at every layer, so one token is counted that many times per layer. A step padded to its CUDA graph's size routes its padding rows too, a few tokens per step on the engine's stale inputs; the picture at a glance is the same.</p>
         <div class="scroll-x" style="margin-top:var(--s-4)">
           <table class="tbl dense" id="ex-table">
             <thead><tr><th>Layer</th><th>Kind</th><th class="r">Expert</th><th class="r">Tokens</th><th class="r">Against an even share</th></tr></thead>

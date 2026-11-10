@@ -1494,7 +1494,36 @@ def collect_experts():
     out = ex.read_header(EXPERTS_FILE)
     # a counter whose writer is gone (the engine stopped, the file stays in /dev/shm) is not live
     out["live"] = bool(out.get("present")) and out.get("age", 1e9) < 5.0
+    if not out.get("present"):
+        # no counter yet: the view draws the layers as the checkpoint describes them, unlit
+        out["shape"] = flash_local_shape()
     return out
+
+
+_SHAPE_CACHE: dict = {}
+
+
+def flash_local_shape():
+    """The flash-local checkpoint's shape for the Experts view before any counter writes (experts.shape):
+    the model the lane's unit serves, its config.json in the cache the unit mounts, and the drafter
+    the unit's flags name. Read once per config file and unit text; None without the unit or the
+    checkpoint on this box."""
+    try:
+        text = FLASH_LOCAL_UNIT_PATH.read_text(errors="replace")
+        m = re.search(r"vllm serve (\S+)", text)
+        if not m:
+            return None
+        snap = served_snapshot(text, m.group(1))[1]
+        if snap is None:
+            return None
+        cfg_path = snap / "config.json"
+        key = (str(cfg_path), cfg_path.stat().st_mtime, hash(text))
+        if _SHAPE_CACHE.get("key") != key:
+            _SHAPE_CACHE["shape"] = ex.shape(json.loads(cfg_path.read_text()), text)
+            _SHAPE_CACHE["key"] = key
+        return _SHAPE_CACHE["shape"]
+    except (OSError, ValueError):
+        return None
 
 
 FEED_CARRY: list[dict] = []        # requests in flight at the last read, for the next one
