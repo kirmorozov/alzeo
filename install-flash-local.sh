@@ -289,6 +289,20 @@ put_experts_plugin(){
   fi
 }
 
+# QWEN38_EXPERTS=0: the routing counter (flash-local-experts/, the cockpit's Experts view) off, the unit handing
+# the plugin its kill switch; 1: on. Unset, the unit keeps what the installed one says, so a counter turned off
+# stays off across a plain switch; on where no unit is installed. Read here, with the window's choice: the
+# lines from the choice to the render are what --units-only runs, and a test runs them alone.
+EXPERTS_OFF=0
+case "${QWEN38_EXPERTS:-}" in
+  "") if [ -f "${INSTALLED:-}" ] && grep -q -- '-e QWEN38_EXPERTS=0 ' "$INSTALLED"; then EXPERTS_OFF=1; fi ;;
+  0) EXPERTS_OFF=1 ;;
+  1) ;;
+  *) die "QWEN38_EXPERTS takes 0 (the routing counter off) or 1 (on), got: $QWEN38_EXPERTS" ;;
+esac
+EXPERTS_LINE=""
+if [ "$EXPERTS_OFF" = 1 ]; then EXPERTS_LINE="-e QWEN38_EXPERTS=0 "; fi
+
 render_unit(){
   local maxlen=262144 yarn="" rc=0
   if [ "$FLASH_LOCAL_CONTEXT" = 1m ]; then
@@ -315,7 +329,7 @@ render_unit(){
       -e "s|__GMU__|$GMU|g" -e "s|__SEQS__|$SEQS|g" -e "s|__HF_CACHE__|$HF_CACHE|g" \
       -e "s|__MAXLEN__|$maxlen|g" -e "s|__YARN__|$yarn|g" \
       -e "s|__ENGINE_BIND__|$ENGINE_BIND|g" -e "s|__PORT__|$PORT|g" \
-      -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e '/^ *\\$/d' \
+      -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e "s|__EXPERTS_LINE__|$EXPERTS_LINE|g" -e '/^ *\\$/d' \
       "$HERE/$UNIT.template" > "$1"
   keep_choice
 }

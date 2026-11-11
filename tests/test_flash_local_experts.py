@@ -423,6 +423,33 @@ class TheLaneMountsIt(unittest.TestCase):
             import shutil
             shutil.rmtree(box.t, ignore_errors=True)
 
+    def test_the_kill_switch_renders_from_the_environment_and_stays_across_a_plain_switch(self):
+        """QWEN38_EXPERTS=0 ./switch-model.sh flash-local: the unit hands the plugin its kill switch;
+        a later switch without the variable keeps it, QWEN38_EXPERTS=1 takes it out."""
+        stage_tests = load("stage_tests", REPO / "tests" / "test_flash_local_stage.py")
+        box = stage_tests.Box()
+        try:
+            flag = "-e QWEN38_EXPERTS=0 -e VLLM_PLE_TABLE_MEMORY=disk"
+            rc, out = box.stage(QWEN38_MEMORY_CLASS="128")
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("-e QWEN38_EXPERTS", box.out.read_text(), "on by default")
+            rc, out = box.stage(QWEN38_MEMORY_CLASS="128", QWEN38_EXPERTS="0")
+            self.assertEqual(rc, 0, out)
+            self.assertIn(flag, box.out.read_text())
+            (box.units / "qwen38-flash-local.service").write_text(box.out.read_text())   # installed, off
+            rc, out = box.stage(QWEN38_MEMORY_CLASS="128")
+            self.assertEqual(rc, 0, out)
+            self.assertIn(flag, box.out.read_text(), "a plain switch keeps the counter off")
+            rc, out = box.stage(QWEN38_MEMORY_CLASS="128", QWEN38_EXPERTS="1")
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("-e QWEN38_EXPERTS", box.out.read_text(), "QWEN38_EXPERTS=1 turns it back on")
+            rc, out = box.stage(QWEN38_MEMORY_CLASS="128", QWEN38_EXPERTS="off")
+            self.assertNotEqual(rc, 0)
+            self.assertIn("QWEN38_EXPERTS takes 0", out)
+        finally:
+            import shutil
+            shutil.rmtree(box.t, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
