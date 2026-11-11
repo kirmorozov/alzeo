@@ -195,8 +195,16 @@
         </div>
         <canvas class="spark tall" id="tr-spark" aria-hidden="true" style="margin-top:var(--s-5)"></canvas>
       </section>
-      <div class="grid g-7-5" style="margin-top:var(--s-5)">
-        <section class="panel" data-src="feed">
+      <section class="panel" id="tr-speed" data-src="engine_fast" style="margin-top:var(--s-5)">
+        <div class="readouts">
+          <div class="readout"><span class="v" id="tr-pre">…</span><span class="k">Prefill, prompt tokens per second</span><canvas class="spark" id="tr-pre-spark" aria-hidden="true"></canvas></div>
+          <div class="readout"><span class="v" id="tr-dec">…</span><span class="k">Decode, generated tokens per second</span><canvas class="spark" id="tr-dec-spark" aria-hidden="true"></canvas></div>
+          <div class="readout"><span class="v" id="tr-tps">…</span><span class="k">Aggregate, both per second</span><canvas class="spark" id="tr-tps-spark" aria-hidden="true"></canvas></div>
+        </div>
+        <p class="help" style="margin-top:var(--s-3)">Averaged over the last 10 seconds, from the engine's own token counters: a long prompt lands in chunks, and the average does not follow each one.</p>
+      </section>
+      <div class="grid g-7-5" id="tr-grid" style="margin-top:var(--s-5)">
+        <section class="panel" id="tr-feed" data-src="feed">
           <header><h2>Requests</h2><span class="aside age"></span></header>
           <div class="scroll-x">
             <table class="tbl dense feed" id="feed">

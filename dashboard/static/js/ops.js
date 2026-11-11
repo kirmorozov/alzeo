@@ -2,6 +2,8 @@
 /* Traffic, Machine, Library, Logs and Settings: the views you open to look closer. */
 
 // ── Traffic ───────────────────────────────────────────────────────────────────
+// tokens per second: whole above 10, a decimal below, 0 when idle
+const fmtRate = v => v == null ? '-' : v >= 10 ? Math.round(v).toLocaleString('en-US') : v > 0 ? v.toFixed(1) : '0';
 // With no text engine the counters say so: they read '…', a value on its way, for as long as
 // the box served nothing (found by the monkey check, 2026-10-02; the page before the
 // redesign of 2026-09-30 said "no engine")
@@ -12,6 +14,14 @@ on('engine_fast', d => {
   setText('tr-tok', none ? 'none' : fmtN(physTokens(l)));
   if (none){ SERIES.req = []; } else push('req', runningReqs(l));
   drawSpark($('tr-spark'), 'req', cssVar('--brand'), Math.max(4, F.maxRun || 4), {empty: none ? 'no text engine' : 'quiet so far'});
+  // the speeds, smoothed by the server over 10 s (engine_metrics.Rate): a dash with no engine
+  // or no read of its counters, 0 when it is idle
+  const sp = d.speed;
+  [['pre', 'prefill', 'tps_pre'], ['dec', 'decode', 'tps_dec'], ['tps', 'total', 'tps_all']].forEach(([id, k, series]) => {
+    setText('tr-' + id, sp ? fmtRate(sp[k]) : '-');
+    if (sp) push(series, sp[k]); else SERIES[series] = [];
+    drawSpark($('tr-' + id + '-spark'), series, cssVar('--brand'), 0, {empty: sp ? 'quiet so far' : 'no reading'});
+  });
 });
 // said after the whole payload: which lane serves is the lifecycle's, read after this one
 afterApply(() => {

@@ -384,3 +384,38 @@ class Window:
             "approximate": any(t0 < tc <= t1 for tc in self.unseparated),
         }
         return out
+
+
+class Rate:
+    """Tokens per second over a sliding window, read off the engine's two token counters at
+    the 1 s tier. A rate is the counters' difference over the time between the window's ends,
+    so a prompt that lands in chunks of 4096 tokens (a 100K prompt) shows its mean over the
+    window and not each chunk's spike, and a pause between two chunks does not read as idle.
+    Counters that went back (the engine started again) or another engine start it again."""
+
+    def __init__(self, span: float = 10.0):
+        self.span = span
+        self.key = None
+        self.samples: deque = deque()     # (t, prompt, generated)
+
+    def add(self, t: float, key, prompt: float, generated: float) -> dict | None:
+        """One read at `t` of the engine `key`: {"prefill", "decode", "total"} in tokens per
+        second, or None until the window holds two reads."""
+        if key != self.key or (self.samples and (prompt < self.samples[-1][1]
+                                                 or generated < self.samples[-1][2])):
+            self.key = key
+            self.samples.clear()
+        self.samples.append((t, prompt, generated))
+        # one read at or before the window's start is kept: the difference starts there
+        while len(self.samples) > 2 and self.samples[1][0] <= t - self.span:
+            self.samples.popleft()
+        t0, p0, g0 = self.samples[0]
+        dt = t - t0
+        if dt < 0.5:
+            return None
+        pre, dec = (prompt - p0) / dt, (generated - g0) / dt
+        return {"prefill": round(pre, 1), "decode": round(dec, 1), "total": round(pre + dec, 1)}
+
+    def clear(self):
+        self.key = None
+        self.samples.clear()

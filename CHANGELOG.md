@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.46.3 (2026-11-10): the cockpit's notes can be hidden, the Traffic view shows the speed of the engine, and its list of connections comes last on a phone
+
+**Hide on a note.** An informational or orange note in the strip at the top of the cockpit ("The clone moved on since the
+last install: ...") has a Hide button. What it hides is kept as a hash of the note's words, title and sentence, in this
+browser's localStorage (every read and write guarded: with the storage blocked, the note stays hidden for the page view
+and comes back at the next load). A note whose words change, a new commit or a new version, has another hash and shows
+again; a countdown in a sentence ("answers again in 2 min") is no part of the hash. "N hidden" at the end of the strip
+brings them back and clears what was kept. Errors, warnings, and the banner of the installer running have no Hide: they
+are about now.
+
+**Speed tiles.** The Traffic view has three tiles beside the running-connections counter, each with its own sparkline:
+prefill (prompt tokens per second), decode (generated tokens per second) and the aggregate of both. The server computes
+them at the 1 s tier from the engine's own token counters (`vllm:prompt_tokens_total`, `vllm:generation_tokens_total`,
+the SGLang names beside them) as a difference over a sliding window of 10 s (`engine_metrics.Rate`), so a 100K prompt
+that lands in chunks of 4096 tokens shows its mean and not each chunk. Idle reads 0; with no text engine, or no read of
+its counters, a dash. Counters that went back, or another engine, start the window again.
+
+**The list of connections last on a narrow screen.** Under 980 px the Traffic view reads: the counters, the speed
+tiles, the last 5 minutes, the abandoned requests, and the list of relayed requests at the end. The wide layout is as it
+was (the order is CSS, not markup).
+
 ## v1.46.2 (2026-11-10): the CI of a push takes a little over nine minutes where it took thirty, and the pass it no longer makes runs every night and before a release
 
 **Thirty minutes, and where they went.** A full run of the CI took 30 minutes on the reference box and 32 on GitHub,
