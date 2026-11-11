@@ -11,7 +11,7 @@ brings them back and clears what was kept. Errors, warnings, and the banner of t
 are about now.
 
 **Speed tiles.** The Traffic view has three tiles beside the running-connections counter, each with its own sparkline:
-prefill (prompt tokens per second), decode (generated tokens per second) and the aggregate of both. The server computes
+prefill (prompt tokens per second), decode (generated tokens per second) and the prompt tokens served from the cache per second. The server computes
 them at the 1 s tier from the engine's own token counters (`vllm:prompt_tokens_total`, `vllm:generation_tokens_total`,
 the SGLang names beside them) as a difference over a sliding window of 10 s (`engine_metrics.Rate`), so a 100K prompt
 that lands in chunks of 4096 tokens shows its mean and not each chunk. Idle reads 0; with no text engine, or no read of

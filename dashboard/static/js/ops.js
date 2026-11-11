@@ -17,7 +17,7 @@ on('engine_fast', d => {
   // the speeds, smoothed by the server over 10 s (engine_metrics.Rate): a dash with no engine
   // or no read of its counters, 0 when it is idle
   const sp = d.speed;
-  [['pre', 'prefill', 'tps_pre'], ['dec', 'decode', 'tps_dec'], ['tps', 'total', 'tps_all']].forEach(([id, k, series]) => {
+  [['pre', 'prefill', 'tps_pre'], ['dec', 'decode', 'tps_dec'], ['cac', 'cached', 'tps_cac']].forEach(([id, k, series]) => {
     setText('tr-' + id, sp ? fmtRate(sp[k]) : '-');
     if (sp) push(series, sp[k]); else SERIES[series] = [];
     drawSpark($('tr-' + id + '-spark'), series, cssVar('--brand'), 0, {empty: sp ? 'quiet so far' : 'no reading'});
