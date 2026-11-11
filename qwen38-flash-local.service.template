@@ -56,6 +56,8 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 # PYTHONDONTWRITEBYTECODE and HF_MODULES_CACHE: nothing root-owned lands in the user's HF cache.
 # The sampling defaults (temperature 1.0, top_k 20, top_p 0.95) are the checkpoint's
 # generation_config.json, which vLLM applies to any request that does not set them.
+# QWEN38_EXPERTS=0, when the line carries it: the routing counter (flash-local-experts/, on the PYTHONPATH
+# below) loads and does nothing; install-flash-local.sh renders it from the same variable at a switch.
 # VLLM_NO_USAGE_STATS and DO_NOT_TRACK: vLLM reports anonymous usage to its authors by default; a
 # box that serves its owner's data sends nothing anywhere.
 # Of the config directory, the two files the engine reads, read-only, and nothing else: its key and
@@ -80,7 +82,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   -e HF_HUB_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \
   -e PYTHONDONTWRITEBYTECODE=1 -e HF_MODULES_CACHE=/tmp/hf-modules \
   -e PYTHONPATH=__PYTHONPATH__ -e QWEN38_KEY_FILE=/out/api-key \
-  -e VLLM_PLE_TABLE_MEMORY=disk -e B12X_DISK_BACKEND=io_uring \
+  __EXPERTS_LINE__-e VLLM_PLE_TABLE_MEMORY=disk -e B12X_DISK_BACKEND=io_uring \
   -e CUTE_DSL_ARCH=sm_121a -e SAFETENSORS_FAST_GPU=1 \
   -e VLLM_WORKER_MULTIPROC_METHOD=spawn -e VLLM_SSM_CONV_STATE_LAYOUT=DS \
   -e VLLM_USE_AOT_COMPILE=1 -e VLLM_USE_MEGA_AOT_ARTIFACT=1 \

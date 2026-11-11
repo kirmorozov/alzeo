@@ -110,7 +110,8 @@ per step, and one asynchronous copy of the matrix to pinned host memory per step
 the hot path. The MoE runs inside the `moe_forward` custom op, which `torch.compile` leaves opaque, so the compiled
 graph and the lane's cached AOT artifact are unchanged. The writer is a daemon thread that touches CPU memory and
 the file alone. Measured against the pinned image's own torch on the reference box's CPU: 3 us a call. The kill
-switch is `QWEN38_EXPERTS=0` in the unit's environment.
+switch is `QWEN38_EXPERTS=0`: `QWEN38_EXPERTS=0 ./switch-model.sh flash-local` renders it into the unit, a plain
+switch after keeps it, and `QWEN38_EXPERTS=1` takes it out.
 
 **What changed on disk.** `install-flash-local.sh` copies the plugin folder to `~/.config/qwen38/flash-local-experts`
 at an install and at a switch, and lists its files among what the engine reads at its start, so a copy changed under
