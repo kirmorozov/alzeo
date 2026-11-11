@@ -396,25 +396,27 @@ class Rate:
     def __init__(self, span: float = 10.0):
         self.span = span
         self.key = None
-        self.samples: deque = deque()     # (t, prompt, generated)
+        self.samples: deque = deque()     # (t, prompt, generated, cached)
 
-    def add(self, t: float, key, prompt: float, generated: float) -> dict | None:
-        """One read at `t` of the engine `key`: {"prefill", "decode", "total"} in tokens per
+    def add(self, t: float, key, prompt: float, generated: float,
+            cached: float = 0.0) -> dict | None:
+        """One read at `t` of the engine `key`: {"prefill", "decode", "cached"} in tokens per
         second, or None until the window holds two reads."""
         if key != self.key or (self.samples and (prompt < self.samples[-1][1]
-                                                 or generated < self.samples[-1][2])):
+                                                 or generated < self.samples[-1][2]
+                                                 or cached < self.samples[-1][3])):
             self.key = key
             self.samples.clear()
-        self.samples.append((t, prompt, generated))
+        self.samples.append((t, prompt, generated, cached))
         # one read at or before the window's start is kept: the difference starts there
         while len(self.samples) > 2 and self.samples[1][0] <= t - self.span:
             self.samples.popleft()
-        t0, p0, g0 = self.samples[0]
+        t0, p0, g0, c0 = self.samples[0]
         dt = t - t0
         if dt < 0.5:
             return None
-        pre, dec = (prompt - p0) / dt, (generated - g0) / dt
-        return {"prefill": round(pre, 1), "decode": round(dec, 1), "total": round(pre + dec, 1)}
+        return {"prefill": round((prompt - p0) / dt, 1), "decode": round((generated - g0) / dt, 1),
+                "cached": round((cached - c0) / dt, 1)}
 
     def clear(self):
         self.key = None

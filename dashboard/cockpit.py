@@ -1082,7 +1082,7 @@ SPEED_LOCK = threading.Lock()
 
 
 def engine_speed(load, now: float):
-    """{"prefill", "decode", "total"} tokens per second of the serving text engine, or None when
+    """{"prefill", "decode", "cached"} tokens per second of the serving text engine, or None when
     none serves or its counters could not be read."""
     key = serving_text_key(lc.TEXT_UNITS + VLLM_UNITS) if load is not None else None
     read = engine_metrics_read(timeout=2.0) if key else None
@@ -1090,7 +1090,7 @@ def engine_speed(load, now: float):
         if read is None:
             SPEED.clear()
             return None
-        return SPEED.add(now, key, read[0]["prompt"], read[0]["generated"])
+        return SPEED.add(now, key, read[0]["prompt"], read[0]["generated"], read[0]["cached"])
 
 
 KERNEL_LAST = {"count": None}
