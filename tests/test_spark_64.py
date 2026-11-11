@@ -153,11 +153,12 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
     install.sh's own lines run here, with prepare-lane.sh, switch-model.sh, sudo, systemctl, curl
     and oc-fit-limits.py replaced by stubs that write down their calls (found in review, 2026-10-24:
     the first epilogue stopped at the switch and said Bolt served while the 27B did). The stand-in
-    for oc-fit-limits.py answers as the tool does to a vLLM engine, which has neither /server_info
-    nor /get_server_info (keepalive-proxy.py, v6.37): one line and a return code of 1."""
+    for oc-fit-limits.py answers as the tool does to the engine on the port: by default a vLLM one,
+    which has neither /server_info nor /get_server_info (keepalive-proxy.py, v6.37), one line and a
+    return code of 1; the 27B's SGLang when a test says so. The cockpit runs unless a test says not."""
 
     def epilogue(self, cls="64", side_boot="0", secondary="", env_choice="", want="1", recommended="0",
-                 ran_before=None, fail=(), health="ok"):
+                 ran_before=None, fail=(), health="ok", cockpit="active", opencode="1", engine="vllm"):
         d = pathlib.Path(tempfile.mkdtemp(prefix="bolt-first-"))
         self.addCleanup(shutil.rmtree, d, True)
         calls = d / "calls"
@@ -169,14 +170,27 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
             (d / name).write_text(f'echo "{name} $*" >> "{calls}"\n'
                                   f'[ "$*" = nemotron ] && exit {rc}\nexit 0\n')
         (d / "oc-fit-limits.py").write_text(
-            f'open("{calls}", "a").write("oc-fit-limits.py\\n")\n'
-            'print("no engine to read at http://127.0.0.1:30000 (HTTPError): start one first, "\n'
-            '      "the pool is only known once it has booted")\nraise SystemExit(1)\n')
+            f'import sys\nopen("{calls}", "a").write(" ".join(["oc-fit-limits.py"] + sys.argv[1:]) + "\\n")\n'
+            + ('print("the engine at http://127.0.0.1:30000 is not SGLang (404 on /server_info and /get_server_info, "\n'
+               '      "as on vLLM): a vLLM lane\'s opencode limits are its own, set when it is loaded, and there is "\n'
+               '      "nothing to fit to its pool")\nraise SystemExit(1)\n' if engine == "vllm"
+               else 'print("opencode limits fitted to the pool of the engine at http://127.0.0.1:30000")\n'))
         start_rc = 1 if "start" in fail else 0
         stub("sudo", f'echo "sudo $*" >> "{calls}"\n[ "$2" = start ] && [ "$3" = qwen38-nemotron.service ] && exit {start_rc}\nexit 0\n')
-        stub("systemctl", 'echo "active"\n' if health != "failed" else 'case "$*" in *nemotron*) echo failed ;; *) echo active ;; esac\n')
-        stub("curl", f'echo "curl $*" >> "{calls}"\nexit {0 if health == "ok" else 7}\n')
-        stub("sleep", "exit 0\n")
+        # NRestarts grows at each reading: a 27B that systemd starts again while it is waited for
+        stub("systemctl", 'case "$*" in\n'
+                          f'  *NRestarts*) n=$(cat "{d}/restarts" 2>/dev/null || echo 0); echo "$n"; echo $((n + 1)) > "{d}/restarts" ;;\n'
+                          f'  *qwen38-dashboard.service*) {"echo active" if cockpit == "active" else "echo inactive; exit 3"} ;;\n'
+                          f'  *nemotron*) {"echo failed" if health == "failed" else "echo active"} ;;\n'
+                          '  *) echo active ;;\nesac\n')
+        # the engine's /health: "ok" answers at once, "failed" never, "late" from its 31st asking on, each asking
+        # that finds nobody taking a twentieth of a second of real time (a wait bounded by a clock is bounded here)
+        stub("curl", f'echo "curl $*" >> "{calls}"\n'
+                     + ("exit 0\n" if health == "ok" else
+                        f'n=$(cat "{d}/asked" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "{d}/asked"\n'
+                        + ('[ "$n" -gt 30 ] && exit 0\n' if health == "late" else "")
+                        + "/bin/sleep 0.05\nexit 7\n"))
+        stub("sleep", f'echo "$*" >> "{d}/slept"\nexit 0\n')
         cfg = d / "cfg"
         cfg.mkdir()
         if ran_before:
@@ -188,9 +202,11 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
                   f'PATH="{d}:$PATH"; REPO_DIR="{d}"; CONFIG_DIR="{cfg}"; PORT=30000; UNIT_NAME=qwen38-sglang.service\n'
                   f'MODEL_CHOICE=stock; LANE=27b; MEM_CLASS={cls}; SIDE_BOOT={side_boot}; SECONDARY="{secondary}"\n'
                   f'_ENV_MODEL_CHOICE="{env_choice}"; WANT_NEMOTRON={want}; RECOMMENDED={recommended}\n'
+                  f'OPENCODE={opencode}\n'
                   + helpers + block)
         r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.slept = (d / "slept").read_text().split() if (d / "slept").exists() else []
         return r.stdout, calls.read_text().splitlines() if calls.exists() else []
 
     LOAD = ["prepare-lane.sh nemotron", "switch-model.sh nemotron", "sudo systemctl stop qwen38-sglang.service",
@@ -208,13 +224,15 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
         does not have, so on a box with opencode on the ending of every such install said "no engine
         to read ... start one first" under a Bolt that served, then gave a NOTE naming a cockpit
         button which refuses on this lane (read in the code, 2026-11-10)."""
-        out, calls = self.epilogue()
-        self.assertEqual(calls[:4], self.LOAD)
-        self.assertEqual(calls[5:], [], "nothing runs after the probe that found Bolt answering")
-        self.assertNotIn("no engine to read", out)
-        self.assertNotIn("NOTE", out)
-        self.assertNotIn("not fitted", out)
-        self.assertTrue(out.rstrip().endswith("the 27B is a Load away in the cockpit"), out)
+        for cockpit in ("active", "inactive"):
+            with self.subTest(cockpit=cockpit):
+                out, calls = self.epilogue(cockpit=cockpit)
+                self.assertEqual(calls[:4], self.LOAD)
+                self.assertEqual(calls[5:], [], "nothing runs after the probe that found Bolt answering")
+                self.assertNotIn("is not SGLang", out)
+                self.assertNotIn("NOTE", out)
+                self.assertNotIn("not fitted", out)
+                self.assertTrue(out.rstrip().endswith("the 27B is a Load away in the cockpit"), out)
 
     def test_a_bolt_that_does_not_answer_puts_the_box_back_on_the_27b(self):
         for fail, health in (((), "failed"), (("start",), "ok")):
@@ -226,6 +244,69 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
                                         "sudo systemctl start qwen38-sglang.service"])
                 self.assertIn("so the 27B serves this box", out)
                 self.assertNotIn("Bolt serves now", out)
+
+    FIT = "oc-fit-limits.py --engine http://127.0.0.1:30000 --restart-agent"
+
+    def test_with_no_cockpit_the_27b_it_falls_back_on_is_fitted_once_it_answers(self):
+        """The switch back writes the 27B's nominal opencode pair, 173,000 + 64,000 at its native window, over the
+        one install.sh fitted to its pool, some 59,625 tokens on a 64 GB box. A cockpit that runs fits it again once
+        the 27B answers (its autofit); a box installed with --no-cockpit, or whose cockpit is stopped, had nobody to,
+        and opencode asked for nearly four times the pool until the next update (found in review, 2026-11-10). The
+        27B is waited for, then fitted. It is only waited for: its unit is neither started a second time nor ever
+        stopped, whatever systemd does with it meanwhile. A first correction proved it as the other lanes are proved,
+        and that proof stops a unit it sees restarting: the 27B, which systemd starts again when the GPU's memory is
+        not given back yet, would have been stopped, and the box left with no engine (found in review, 2026-11-10).
+        Here the stand-in's NRestarts grows at each reading."""
+        back = ["sudo systemctl stop qwen38-nemotron.service", "switch-model.sh stock",
+                "sudo systemctl start qwen38-sglang.service"]
+        for fail, health in (((), "failed"), (("start",), "ok")):
+            with self.subTest(fail=fail, health=health):
+                out, calls = self.epilogue(fail=fail, health=health, cockpit="inactive", engine="sglang")
+                self.assertEqual(calls[:4], self.LOAD)
+                tail = [c for c in calls[4:] if not c.startswith("curl ")]
+                self.assertIn("so the 27B serves this box", out)
+                self.assertIn("opencode's limits are fitted to the 27B's pool again once it answers", out)
+                if health == "failed":
+                    # Bolt's unit failed, and the stand-in's curl answers nothing: the 27B does not come back in time
+                    self.assertEqual(tail, back, "nothing is fitted, started again or stopped")
+                    self.assertIn("NOTE: the 27B does not answer yet, and opencode keeps its nominal limits, above its "
+                                  "pool here: once it serves, run python3 oc-fit-limits.py", out)
+                    # it was asked every 10 s for as long as the run says it waits, on the engine's own port
+                    wait = int(re.search(r"^\s*if text_lane_answers (\d+); then$", INSTALL, re.M).group(1))
+                    asked = [c for c in calls[4:] if c.startswith("curl ")]
+                    self.assertEqual(len(asked), wait // 10, "one asking every 10 s of the wait")
+                    self.assertEqual(self.slept, ["10"] * (wait // 10))
+                    self.assertTrue(all(c.endswith(" http://127.0.0.1:30000/health") for c in asked), asked[:2])
+                    self.assertIn(f"once it answers ({wait // 60} min at most)", out)
+                    continue
+                self.assertEqual(tail, back + [self.FIT], "the 27B is waited for and fitted, never started twice nor stopped")
+                health_at = max(i for i, c in enumerate(calls) if c.startswith("curl ") and "/health" in c)
+                self.assertGreater(calls.index(self.FIT), health_at, "fitted once the 27B answered")
+                self.assertFalse([c for c in calls if "chat/completions" in c], "no generation is sent to a box's only lane")
+                self.assertNotIn("nominal limits", out)
+        # a 27B that takes its time (it answers at the 31st asking, some five minutes in) is still waited for
+        out, calls = self.epilogue(fail=("start",), health="late", cockpit="inactive", engine="sglang")
+        self.assertEqual([c for c in calls[4:] if not c.startswith("curl ")], back + [self.FIT])
+        self.assertEqual(len([c for c in calls if c.startswith("curl ")]), 31)
+        self.assertEqual(self.slept, ["10"] * 30)
+        self.assertNotIn("nominal limits", out)
+        # a switch that failed may have written Bolt's pair before it failed: the 27B, never stopped, is fitted too
+        out, calls = self.epilogue(fail=("switch-model.sh nemotron",), cockpit="inactive", engine="sglang")
+        self.assertEqual([c for c in calls if not c.startswith("curl ")],
+                         ["prepare-lane.sh nemotron", "switch-model.sh nemotron", "switch-model.sh stock", self.FIT])
+        # a preparation that failed moved nothing, the switch never ran: nothing is waited for, fitted or asked of sudo
+        out, calls = self.epilogue(fail=("prepare-lane.sh",), cockpit="inactive", engine="sglang")
+        self.assertEqual(calls, ["prepare-lane.sh nemotron"])
+        self.assertNotIn("fitted", out)
+
+    def test_a_cockpit_that_runs_fits_them_and_a_box_with_no_opencode_has_none(self):
+        # the ending of before: the cockpit's autofit fits the 27B once it answers, and --no-opencode wrote no limits
+        for kw in ({"cockpit": "active"}, {"cockpit": "inactive", "opencode": "0"}):
+            with self.subTest(**kw):
+                out, calls = self.epilogue(fail=("start",), engine="sglang", **kw)
+                self.assertEqual(calls, self.LOAD + ["sudo systemctl stop qwen38-nemotron.service", "switch-model.sh stock",
+                                                     "sudo systemctl start qwen38-sglang.service"])
+                self.assertNotIn("fitted", out)
 
     def test_a_prepare_or_a_switch_that_fails_stops_nothing(self):
         out, calls = self.epilogue(fail=("prepare-lane.sh",))
@@ -244,8 +325,8 @@ class ANew64GBBoxServesBolt(unittest.TestCase):
         self.assertEqual(calls[:4], self.LOAD)
 
     def test_nothing_else_is_moved(self):
-        for kw in ({"cls": "128"}, {"side_boot": "1"}, {"secondary": "27b"}, {"env_choice": "uncensored"},
-                   {"want": "0"}):
+        for kw in ({"cls": "128"}, {"cls": "128", "cockpit": "inactive", "fail": ("start",)}, {"side_boot": "1"},
+                   {"secondary": "27b"}, {"env_choice": "uncensored"}, {"want": "0"}):
             with self.subTest(**kw):
                 out, calls = self.epilogue(**kw)
                 self.assertEqual(calls, [])

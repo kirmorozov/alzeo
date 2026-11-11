@@ -105,7 +105,7 @@ const isNemotron = u => u === NEMOTRON_UNIT || u === NEMOTRON_SUPER_UNIT;
 // the vLLM lanes on b12x, the two Nemotron lanes, the Qwen3.8 Flash-Next FP4-Local lane and the Ornith lane: the
 // same routes, the same counters, the same belts that cannot act; each says its own name
 const isB12x = u => isNemotron(u) || u === FLASH_LOCAL_UNIT || u === ORNITH_UNIT;
-const b12xName = u => u === FLASH_LOCAL_UNIT ? 'the Qwen3.8 Flash-Next FP4-Local lane' : u === ORNITH_UNIT ? 'the Ornith lane' : 'the Nemotron lane';
+const b12xName = u => `the ${LANE_NAME[u]} lane`;
 // The lanes' names in sentences, each its family's official name (decision 1180 of Hasan, 2026-11-07: no name of
 // our own, neither for a lane nor for its default version)
 const LANE_NAME = {[U27]: 'Qwen3.8 27B', [UFLASH]: 'Qwen3.8 Flash-Next', [FLASH_LOCAL_UNIT]: 'Qwen3.8 Flash-Next FP4-Local',
@@ -175,18 +175,18 @@ const TARGET_LINE = {
 const TARGET_NOTE = {
   stock: 'The NVFP4 quantization this repo pins by default: smallest and fastest of the 27B targets.',
   uncensored: 'The abliterated NVFP4 checkpoint: same size and speed as RadixArk’s NVFP4, refusals removed.',
-  fp8: 'Qwen’s own FP8 release: the most faithful weights of this lane, and the heaviest. 30.9 GB against 21 GB for NVFP4, taken out of the KV pool: around 200,000 fewer tokens of context and a slower decode. The first switch downloads about 31 GB.',
+  fp8: 'Qwen’s own FP8 release: the most faithful weights of this lane, and the heaviest. 30.9 GB against 21.9 GB for NVFP4, taken out of the KV pool: 771,139 tokens against 863,398 on the same 1M unit, and a slower decode. The first switch downloads about 31 GB.',
   'uncensored-fp8': 'The abliterated weights in Qwen’s FP8 format: the same 30.9 GB and the same cost in pool and speed as FP8. The first switch downloads about 31 GB.',
-  flash: 'The 176B Flash-Next lane: its own unit, its own image, and a 47.7 GiB N-gram table on the NVMe that the server rewrites at every boot.',
+  flash: 'The Qwen3.8 Flash-Next lane: its own unit, its own image, and a 47.7 GiB N-gram table on the NVMe that the server rewrites at every boot.',
   'flash-uncensored': 'The abliterated build of the same 176B tree, byte-identical in layout, so every serving flag is the same. The first switch downloads about 136 GB.',
   'flash-nvda': 'NVIDIA’s own mixed-precision export of the same model, served with a pinned MoE runner. The first switch downloads about 133 GB.',
-  image: 'Text to image, editing with up to ten references, native RGBA. 31 GB of weights that do not fit beside a text lane.',
+  image: 'Text to image, editing with up to ten references, native RGBA. 31 GiB of weights that do not fit beside a text lane.',
   'image-turbo': 'Qwen’s eight-step distillation of the same model, for the same three uses: a 1024 × 1024 image in 7.5 s against 34 s, at the same memory, the eight steps fixed by the checkpoint. The first switch downloads about 33 GB.',
   video: 'Text to video with joint audio, plus first and last frame conditioning. The checkpoint does not fit beside a text lane.',
   kolibri: 'Aleph Alpha’s official FP8 release, served as their model card says: vLLM 0.29 with their plugin, 262,144 tokens of context, temperature 1.0, top_p 0.97, top_k 128, reasoning on (effort low, medium, high or none per request). German and English are its languages. Measured on this box: 48 tokens/s alone, 166 at 8 requests.',
   'kolibri-nvfp4': 'The same model with its routed experts in 4-bit NVFP4 (Quantinine), attention and everything else the official FP8 bit for bit: 53 tokens/s alone and 248 at 8 requests, in 42.8 GiB instead of 73.6. English and German text score level with the FP8; French measurably lower (about 4 % of perplexity). The first switch downloads about 46 GB.',
   nemotron: 'NVIDIA’s Nemotron 3.5 Bolt, its experts in 2 bits, served as its model card says: vLLM nightly with b12x, its LiLiCorr drafter, 262,144 tokens of context, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request). It reads images and video. Measured on this box: 140 tokens/s alone on code, 50 on prose, 201 in all at 16 requests, 24 requests at the full window. The first switch downloads about 26 GB.',
-  'nemotron-super': 'NVIDIA’s Nemotron 3.5 Super VL in NVFP4, served as its model card says for a DGX Spark: its LiLiCorr drafter, a window of 1,048,576 tokens, the Mamba state in float16 with stochastic rounding, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request), in the Nemotron Bolt lane’s vLLM image. It reads images and video. Measured on this box: 70 tokens/s alone on code, 31 on prose, its whole window 1.1 to 1.3 times over in its cache. The first switch downloads about 77 GB.',
+  'nemotron-super': 'NVIDIA’s Nemotron 3.5 Super VL in NVFP4, served as its model card says for a DGX Spark: its LiLiCorr drafter, a window of 1,048,576 tokens, the Mamba state in float16 with stochastic rounding, temperature 1.0, top_p 0.95, reasoning on (off, efficient or full per request), in the Nemotron 3.5 Bolt lane’s vLLM image. It reads images and video. Measured on this box: 70 tokens/s alone on code, 31 on prose, its whole window 1.1 to 1.3 times over in its cache. The first switch downloads about 77 GB.',
   'flash-local': 'NVIDIA’s own FP4 build of the flash model, served as its model card says for a DGX Spark: vLLM with b12x, its experts and its n-gram table in NVFP4 after a quantization-aware distillation from the full precision (GPQA Diamond 91.5 % against 92.2 % on NVIDIA’s card), an MTP head drafting 4 tokens, 262,144 tokens of context and a KV cache of about 920,000 tokens, reasoning on at xhigh unless a request asks less. Its table is read at every token: with the HF cache on another disk, its first Load copies the table’s files (32 GB) beside your home directory. The first boot tunes b12x’s kernels for this GPU, about 17 min; the next ones take about 6. The first switch downloads about 102 GB.',
   'flash-local-dflash2': 'The same FP4 build and the same serving command, drafted by incoai’s DFlash2 drafter for this model (about 1.2 GB, fetched with the checkpoint on the first switch) instead of its own MTP head: the drafter’s capture plugin is mounted read-only at /opt/df2-plugin beside the key middleware, and the target builds into its own caches, flash-local-cache-dflash2/, because the compiled drafter and the kernel choices of one drafter’s run are not the other’s. The box serves it under the same name, qwen3.8-flash-next-fp4, with the output head in BF16 instead of MXFP8, which the drafter shares.',
   'ornith-122b': 'Ornith AI’s Ornith 1.5 122B (MIT) in its authors’ NVFP4 build, served by vLLM with b12x in the Qwen3.8 Flash-Next FP4-Local lane’s image: its experts and output head in NVFP4, its projections in FP8, an MTP head drafting 2 tokens, 1,048,576 tokens of context (its own 262,144 stretched four times with YaRN), temperature 0.6, top_p 0.95, top_k 20, reasoning on (off with effort none or minimal). It reads images and video. The first switch downloads about 78 GB.'};
@@ -530,14 +530,19 @@ const NEEDS_ENGINE = new Set(['flush_cache', 'abort_all', 'smoke']);
 // what the Kolibri lane's vLLM has no route for: offered there, these could only fail (found in
 // review, 2026-10-14). The fit reads SGLang's /server_info, and Kolibri's limits are its own.
 const KOLIBRI_CANNOT = {
-  flush_cache: 'The Kolibri lane has no cache flush route: vLLM evicts its prefix cache by itself.',
-  abort_all: 'The Kolibri lane has no route that aborts its generations: stopping the lane stops them.',
-  fit_opencode: 'Kolibri\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
+  flush_cache: 'The Kolibri-1 lane has no cache flush route: vLLM evicts its prefix cache by itself.',
+  abort_all: 'The Kolibri-1 lane has no route that aborts its generations: stopping the lane stops them.',
+  fit_opencode: 'The Kolibri-1 lane\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
 // the Nemotron lanes run on vLLM too: the same three
 const NEMOTRON_CANNOT = {
-  flush_cache: 'The Nemotron lane has no cache flush route: vLLM evicts its prefix cache by itself.',
-  abort_all: 'The Nemotron lane has no route that aborts its generations: stopping the lane stops them.',
-  fit_opencode: 'Nemotron\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
+  flush_cache: 'The Nemotron 3.5 Bolt lane has no cache flush route: vLLM evicts its prefix cache by itself.',
+  abort_all: 'The Nemotron 3.5 Bolt lane has no route that aborts its generations: stopping the lane stops them.',
+  fit_opencode: 'The Nemotron 3.5 Bolt lane\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
+// and the Nemotron 3.5 Super VL lane, in its own name (cockpit.py NEMOTRON_SUPER_CANNOT)
+const NEMOTRON_SUPER_CANNOT = {
+  flush_cache: 'The Nemotron 3.5 Super VL lane has no cache flush route: vLLM evicts its prefix cache by itself.',
+  abort_all: 'The Nemotron 3.5 Super VL lane has no route that aborts its generations: stopping the lane stops them.',
+  fit_opencode: 'The Nemotron 3.5 Super VL lane\'s opencode limits are its own, set when it is loaded: there is nothing to fit to its pool.'};
 // and the Qwen3.8 Flash-Next FP4-Local lane, in its own name, as the server says it (cockpit.py FLASH_LOCAL_CANNOT)
 const FLASH_LOCAL_CANNOT = {
   flush_cache: 'The Qwen3.8 Flash-Next FP4-Local lane has no cache flush route: vLLM evicts its prefix cache by itself.',
@@ -545,13 +550,14 @@ const FLASH_LOCAL_CANNOT = {
   fit_opencode: 'The Qwen3.8 Flash-Next FP4-Local lane\'s opencode limits are its own, set when it is loaded: its window decides them, not its pool.'};
 // and the Ornith lane, in its own name (cockpit.py ORNITH_CANNOT)
 const ORNITH_CANNOT = {
-  flush_cache: 'The Ornith lane has no cache flush route: vLLM evicts its prefix cache by itself.',
-  abort_all: 'The Ornith lane has no route that aborts its generations: stopping the lane stops them.',
-  fit_opencode: 'The Ornith lane\'s opencode limits are its own, set when it is loaded: its window decides them, not its pool.'};
+  flush_cache: 'The Ornith 1.5 122B lane has no cache flush route: vLLM evicts its prefix cache by itself.',
+  abort_all: 'The Ornith 1.5 122B lane has no route that aborts its generations: stopping the lane stops them.',
+  fit_opencode: 'The Ornith 1.5 122B lane\'s opencode limits are its own, set when it is loaded: its window decides them, not its pool.'};
 function cannotWhy(name){
   const s = servingEngine();
   return !s ? '' : s[0] === KOLIBRI_UNIT ? (KOLIBRI_CANNOT[name] || '') : s[0] === FLASH_LOCAL_UNIT ? (FLASH_LOCAL_CANNOT[name] || '')
-    : s[0] === ORNITH_UNIT ? (ORNITH_CANNOT[name] || '') : isNemotron(s[0]) ? (NEMOTRON_CANNOT[name] || '') : '';
+    : s[0] === ORNITH_UNIT ? (ORNITH_CANNOT[name] || '') : s[0] === NEMOTRON_SUPER_UNIT ? (NEMOTRON_SUPER_CANNOT[name] || '')
+    : isNemotron(s[0]) ? (NEMOTRON_CANNOT[name] || '') : '';
 }
 function noEngineWhy(){
   if (textReady()) return '';
@@ -580,7 +586,7 @@ const EXPLAIN = {
   switch: p => (TARGET_NOTE[p.target] ? TARGET_NOTE[p.target] + '\n\n' : '') +
     `switch-model.sh verifies the checkpoint, makes this lane the one enabled at boot and ${TARGET_UNIT(p.target) === VIDEO_UNIT ? 'changes nothing else'
       : TARGET_UNIT(p.target) === IMAGE_UNIT ? 'points its unit at this checkpoint'
-      : TARGET_UNIT(p.target) === KOLIBRI_UNIT ? 'points its unit at this checkpoint and its memory share, and makes Kolibri opencode\'s default model, with its compaction'
+      : TARGET_UNIT(p.target) === KOLIBRI_UNIT ? `points its unit at this checkpoint and its memory share, and makes ${LANE_NAME[KOLIBRI_UNIT]} opencode's default model, with its compaction`
       : TARGET_UNIT(p.target) === FLASH_LOCAL_UNIT ? `puts in its unit for this checkpoint, with its chat template and, when the HF cache is on another disk, the copies of its n-gram table, and makes ${LANE_NAME[FLASH_LOCAL_UNIT]} opencode's default model, with its compaction`
       : TARGET_UNIT(p.target) === ORNITH_UNIT ? `puts in its unit for this checkpoint, and makes ${LANE_NAME[ORNITH_UNIT]} opencode's default model, with its compaction`
       : isNemotron(TARGET_UNIT(p.target)) ? `points its unit at this checkpoint and its memory share, and makes ${LANE_NAME[TARGET_UNIT(p.target)]} opencode's default model, with its compaction`
@@ -758,7 +764,7 @@ const LANE_RUNTIME = {flash: 'its SGLang image (about 16 GB to download), its ch
   video: 'a venv and SGLang Diffusion, about 12 GB, about 10 minutes, and the Turbo adapter',
   kolibri: 'its vLLM image, about 10 GB to download (23 GB on disk), pulled and built here',
   nemotron: 'its vLLM image, about 11 GB to download (25 GB on disk), pulled and built here',
-  'nemotron-super': 'the Nemotron lanes’ vLLM image (the Bolt lane’s), about 11 GB to download (25 GB on disk), pulled and built here once for the two',
+  'nemotron-super': 'the Nemotron 3.5 Bolt lane’s vLLM image, about 11 GB to download (25 GB on disk), pulled and built here once for both lanes',
   'flash-local': 'its vLLM image with b12x, about 10 GB to download (18 GB on disk), pulled as its model card names it',
   'ornith-122b': 'the Qwen3.8 Flash-Next FP4-Local lane’s vLLM image with b12x, about 10 GB to download (18 GB on disk), pulled once for the two'};
 const SIDE_LANE = {[IMAGE_UNIT]: 'image', [VIDEO_UNIT]: 'video', [KOLIBRI_UNIT]: 'kolibri', [NEMOTRON_UNIT]: 'nemotron',
@@ -1062,20 +1068,37 @@ function applyBusy(){
 // The settings conformity.py compares that are no variable of their own, as the page names them
 // (v1.36.0): the same names install.sh's list gives them.
 const CF_NAME = {'target.27b': '27B target', 'target.flash': 'flash target', DRAFT2: '27B drafter',
-  KOLIBRI_VARIANT: 'Kolibri checkpoint', IMAGE_MODEL: 'image model', VIDEO_VARIANT: 'video variant'};
+  KOLIBRI_VARIANT: 'Kolibri-1 checkpoint', IMAGE_MODEL: 'image model', VIDEO_VARIANT: 'video variant'};
 const cfName = i => CF_NAME[i.knob] || i.knob;
 function wedgeNext(){
   const c = F.config || {};
   if (c.autoheal) return 'The autoheal belt restarts it' + (c.autoheal_grace_s ? ` after its ${fmtDur(c.autoheal_grace_s)} grace period` : '');
   return 'Nothing restarts it by itself (the autoheal belt is off; COCKPIT_AUTOHEAL=1 arms it): stop it and start it again from Lanes';
 }
+// Hide on a note (2026-11-10): the hash of its words (title and sentence) is kept in this browser's
+// localStorage, and a note whose words changed (a new commit, a new version) has another hash, so it shows
+// again. Only the notes that inform (info, orange) can be hidden: an error, a warning, or the installer
+// running (pin) is about now. Every read and write of the storage is guarded, and the page works with it blocked.
+const HIDDEN_KEY = 'cockpit.hidden-notes', HIDEABLE = new Set(['info', 'orange']), HIDDEN_MAX = 100;
+// durations a note counts down ("answers again in 2 min") are no part of what it says
+const msgHash = (strong, text) => {
+  const s = strong + '\n' + String(text).replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|min|m|h)\b/g, '#');
+  let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+const hiddenGet = () => { try { const a = JSON.parse(localStorage.getItem(HIDDEN_KEY)); return Array.isArray(a) ? a.filter(x => typeof x === 'string') : []; } catch { return []; } };
+const hiddenSet = a => { try { if (a.length) localStorage.setItem(HIDDEN_KEY, JSON.stringify(a.slice(-HIDDEN_MAX))); else localStorage.removeItem(HIDDEN_KEY); } catch { /* storage may be unavailable: hidden for this page view only */ } };
+let hiddenMem = null;       // the same list kept in memory too, for a browser that refuses the storage
+const hiddenList = () => hiddenMem || (hiddenMem = hiddenGet());
+function hideNote(h){ hiddenMem = hiddenList().filter(x => x !== h).concat(h).slice(-HIDDEN_MAX); hiddenSet(hiddenMem); if (lastState) renderBanners(lastState, lastErrors); }
+function showHiddenNotes(){ hiddenMem = []; hiddenSet([]); if (lastState) renderBanners(lastState, lastErrors); }
 function renderBanners(state, errors){
   const box = $('banners'); if (!box) return;
-  const want = [];
+  let want = [];
   // cmd: a command the banner asks to run, shown apart with a Copy button (Hasan, 2026-10-21:
   // selecting it by hand out of a sentence was the only way)
   // list: lines a banner shows one under the other, between its title and its sentence (the commits of the clone)
-  const add = (kind, strong, text, cmd, list) => want.push([kind, strong, text, cmd, list]);
+  const add = (kind, strong, text, cmd, list, pin) => want.push([kind, strong, text, cmd, list, !pin && HIDEABLE.has(kind) ? msgHash(strong, text) : null]);
   const otherUp = n => Object.entries(engines()).some(([m, x]) => m !== n && (!UNIT_DOWN.has(x.state) || x.restarting));
   if (offline) add('err', 'Connection lost.', `No data from the cockpit for ${fmtDur((Date.now() - lastMsgAt) / 1000)}: what is on screen is frozen and actions wait.`);
   if (F.config && F.config.dry_run) add('info', 'Dry run.', 'Every action is confirmed, logged and audited as usual, but nothing is executed. This instance exists for tests.');
@@ -1150,7 +1173,7 @@ function renderBanners(state, errors){
   // that asks to restart this cockpit, which the update restarts
   const run = upd.install_running;
   if (run) add('info', run.to ? `Installing ${run.to}.` : 'The installer is running.',
-    `It started ${fmtMin(Math.max(0, Date.now() / 1000 - run.started))} ago. There is nothing to run meanwhile: this page says what is left to do once it ends.`);
+    `It started ${fmtMin(Math.max(0, Date.now() / 1000 - run.started))} ago. There is nothing to run meanwhile: this page says what is left to do once it ends.`, null, null, true);
   if (upd.behind && !run) add('info', `Version ${upd.latest} is out; this box runs ${upd.installed}.`, 'The update keeps your choices, and moves a default an older release left to today\'s: it lists both before its first step. Update with:', updateCmd(F.config));
   // The services behind their own clone (v1.36.0): installed.json names the release and the
   // commit the last run that ended well installed. A git pull with no ./install.sh moves the
@@ -1201,16 +1224,18 @@ function renderBanners(state, errors){
     `The container ${o.container} serves, but its unit is not running, so no other engine may start and a reboot will not bring it back. Start it from Lanes to replace it, or remove it:`, `docker rm -f ${o.container}`));
   if (errors.lifecycle) add('warn', 'Engine state unknown.', 'The lifecycle collector failed: ' + String(errors.lifecycle).slice(0, 120));
   // drawn only when it changed: a live region re-read twice a second is noise
-  const sig = JSON.stringify(want.map(w => [w[0], w[1], !!w[3], w[4] || null]));
+  const hid = new Set(hiddenList()), hiddenN = want.filter(w => w[5] && hid.has(w[5])).length;
+  want = want.filter(w => !(w[5] && hid.has(w[5])));
+  const sig = JSON.stringify([hiddenN, want.map(w => [w[0], w[1], !!w[3], w[4] || null])]);
   if (box.dataset.sig === sig){
-    [...box.children].forEach((b, i) => {
+    [...box.children].slice(0, want.length).forEach((b, i) => {
       const t = b.querySelector('.t'); if (t) setText(t, want[i][2]);
       const c = b.querySelector('.bcmd .cmd'); if (c) setText(c, want[i][3]);
     });
     return;
   }
   box.dataset.sig = sig; clear(box);
-  want.forEach(([kind, strong, text, cmd, list]) => {
+  want.forEach(([kind, strong, text, cmd, list, hash]) => {
     const b = el('div', 'banner ' + kind);
     b.append(el('span', 'lamp ' + (kind === 'err' ? 'err' : kind === 'warn' ? 'warn' : kind === 'orange' ? 'orange' : '')));
     const p = el('div'); p.append(el('b', null, strong + ' '));
@@ -1221,8 +1246,18 @@ function renderBanners(state, errors){
       btn.type = 'button'; btn.addEventListener('click', () => copyText(pre.textContent));
       row.append(btn); c.append(pre, row); p.append(c);
     }
-    b.append(p); box.append(b);
+    b.append(p);
+    if (hash){
+      const x = el('button', 'btn sm ghost nhide', 'Hide'); x.type = 'button'; x.title = 'Hide this note until its words change';
+      x.addEventListener('click', () => hideNote(hash)); b.append(x);
+    }
+    box.append(b);
   });
+  if (hiddenN){
+    const row = el('div', 'banner-hidden'), btn = el('button', 'btn sm ghost nshow', 'Show again');
+    btn.type = 'button'; btn.addEventListener('click', showHiddenNotes);
+    row.append(el('span', 'hn', `${hiddenN} hidden`), btn); box.append(row);
+  }
 }
 afterApply(renderBanners);
 

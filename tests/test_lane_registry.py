@@ -32,6 +32,7 @@ import re
 import sys
 import textwrap
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -98,17 +99,11 @@ def units_of(lanes):
 # ---------------------------------------------------------------------------------------------------
 # Drifts this test finds and step 1 of the lane factory leaves as they are (2026-11-10), each to
 # decide: (file, construct, key) -> the exact value found there. Any other value there still fails.
+# None today: the last six, the b12x lanes in a sentence in the cockpit and its page (the two Nemotron
+# lanes under their family's name, Ornith under a short one), were decided on 2026-11-10 by Hasan, the
+# official names there as everywhere.
 
-TO_DECIDE = {
-    # to decide (inventory, 14.2): the b12x lanes in a sentence, the two Nemotron lanes under their
-    # family's name and Ornith under a short one, beside LANE_NAME's official names
-    ("dashboard/cockpit.py", "B12X_LANE_NAME", "nemotron"): "the Nemotron lane",
-    ("dashboard/cockpit.py", "B12X_LANE_NAME", "nemotron-super"): "the Nemotron lane",
-    ("dashboard/cockpit.py", "B12X_LANE_NAME", "ornith-122b"): "the Ornith lane",
-    ("dashboard/static/js/base.js", "b12xName", "nemotron"): "the Nemotron lane",
-    ("dashboard/static/js/base.js", "b12xName", "nemotron-super"): "the Nemotron lane",
-    ("dashboard/static/js/base.js", "b12xName", "ornith-122b"): "the Ornith lane",
-}
+TO_DECIDE = {}
 
 
 def excuses(*where):
@@ -368,6 +363,88 @@ def patterns(arms):
     return [p for pats, _, _ in arms for p in pats if p != "*" and not p.startswith("$")]
 
 
+# A command that prints, wherever it stands on its line ("[ -f x ] || die ..."), and a lane named by a proper
+# name after it ("the Kolibri-1 lane", "The Ornith 1.5 122B lane's", "a Nemotron lane", "The 176B Flash-Next
+# lane"): a name that starts with a capital, figures before it or none. The 27B and the image and video lanes
+# are named by a figure or in lower case ("the image lane").
+SH_MESSAGE = re.compile(r"(?<![\w$-])(?:echo|step|die|printf|section)\b")
+LANE_NAMED = re.compile(r"\b(?:[Tt]he|[Aa]n?) ((?:\d[\w.]* )*[A-Z][\w.-]*(?: [A-Z0-9][\w.-]*)*) lanes?\b")
+# a here-document's opening (<<WORD, <<-'WORD'), not a here-string (<<<)
+SH_HEREDOC = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+
+
+# an engine's or a maker's lanes, said as a family ("the SGLang lanes", "a Qwen lane"): no lane's own name. "The
+# Qwen lane", one lane, is a short name like another (found in review, 2026-11-10).
+FAMILIES = {"SGLang", "vLLM", "Qwen"}
+
+
+def lanes_named(text, start=0):
+    """[(the words as written, the name)] of each lane a text names by a proper name, the families aside: in the
+    plural, or after "a" or "an"."""
+    out = []
+    for m in LANE_NAMED.finditer(text, start):
+        family = m.group(1) in FAMILIES and (m.group(0).endswith("lanes") or m.group(0).split()[0].lower() in ("a", "an"))
+        if not family:
+            out.append((m.group(0), m.group(1)))
+    return out
+
+
+def sh_code(line):
+    """A shell line without its comment: a # that starts a word, outside quotes ('...', "...", $'...') and outside a
+    $(...), whose own quotes are its own. A line this cannot follow is kept whole."""
+    quote, i = None, 0
+    while i < len(line):
+        c = line[i]
+        if line.startswith("$(", i) and quote != "'":
+            try:
+                i = _skip_substitution(line, i + 2)
+            except ValueError:
+                return line
+            continue
+        if quote:
+            if c == "\\" and quote != "'":
+                i += 1
+            elif c == quote[-1]:
+                quote = None
+        elif line.startswith("$'", i):
+            quote, i = "$'", i + 1
+        elif c in "'\"":
+            quote = c
+        elif c == "\\":
+            i += 1
+        elif c == "#" and (i == 0 or line[i - 1] in " \t;|&()<>"):
+            return line[:i]
+        i += 1
+    return line
+
+
+def sh_messages(text):
+    """[(line, name)] of each lane a script's messages name by a proper name, in the lines that print. Its
+    comments are not read, at the end of a line either, nor its here-documents (install.sh's help is one, and
+    the Python the scripts run are others). A here-document's body starts after the last line of its command: a
+    line that ends with a backslash goes on, and is read (install-video.sh's "<<'PY' \\" then "|| echo ..." was
+    taken for the body: found in review, 2026-11-10). A << inside (( )) is a shift. A here-document that never
+    meets its word raises ValueError: nothing after it is skipped unread."""
+    out, lines, i, opened = [], text.splitlines(), 0, []
+    while i < len(lines):
+        n, code = i + 1, sh_code(lines[i])
+        i += 1
+        cmd = SH_MESSAGE.search(code)
+        if cmd:
+            out += [(n, name) for _, name in lanes_named(code, cmd.end())]
+        opened += [(n, h) for h in SH_HEREDOC.finditer(code)
+                   if code.count("((", 0, h.start()) <= code.count("))", 0, h.start())]
+        if opened and not code.rstrip().endswith("\\"):
+            for at, h in opened:
+                while i < len(lines) and (lines[i].lstrip("\t") if h.group(1) else lines[i]) != h.group(3):
+                    i += 1
+                if i == len(lines):
+                    raise ValueError(f"line {at}: a here-document never meets its {h.group(3)}")
+                i += 1
+            opened = []
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------
 # Python: module-level assignments and the literals of named functions, read by ast.
 
@@ -413,6 +490,26 @@ def py_strings(rel):
                 if isinstance(t, ast.Name):
                     out.setdefault(t.id, node.value.value)
     return out
+
+
+# what an f-string's {...} and a template literal's ${...} read as in their text: no lane's name
+HOLE = "{}"
+
+
+def py_said(rel):
+    """[(line, text)] of every string of a Python file but its docstrings and the strings that stand alone as a
+    statement: what it may print, send or show. An f-string is read whole, each {...} in it as HOLE."""
+    tree, out = tree_of(rel), []
+    alone = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
+    parts = {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) for v in n.values}
+    for node in ast.walk(tree):
+        if id(node) in alone or id(node) in parts:
+            continue
+        if isinstance(node, ast.JoinedStr):
+            out.append((node.lineno, "".join(v.value if isinstance(v, ast.Constant) else HOLE for v in node.values)))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            out.append((node.lineno, node.value))
+    return sorted(out)
 
 
 def py_value(node, rel):
@@ -565,6 +662,98 @@ def js_const(rel, name):
     if not m:
         raise NotFound(f"{rel}: no const {name}")
     return js_value(text, m.end())[0], line_at(text, m.start())
+
+
+JS_NUMBER = re.compile(r"\d[\w.]*")
+JS_FLAGS = re.compile(r"\w*")
+
+
+def js_strings(text):
+    """[(line, text)] of every string of a JavaScript file, '...', "..." and `...`: a template literal's text whole,
+    each ${...} in it as HOLE, and each string inside that ${...} on its own. An escape is read as the character
+    after its backslash. Comments are not read, nor regex literals: a slash starts one where no value ends just
+    before it (after "(", "=", ",", an operator, a word such as "return"), and is a division after a name, a
+    number, a string or a closing ")" or "]". A text this cannot follow to its end raises ValueError with the line
+    where it lost its place: no string after it is ever left unread. Compared with acorn on the page's ten files
+    (2026-11-10): the same 4,573 strings, each at its line."""
+    out, holes, n = [], [], len(text)
+
+    def lost(k, why):
+        raise ValueError(f"line {line_at(text, k)}: {why}")
+
+    def template(k, start, parts):
+        """The text of the template literal opened at `start`, read on from k: past its backtick, kept, or past a
+        ${, the template held in `holes` until the } that closes it."""
+        while k < n:
+            if text[k] == "\\":
+                parts.append(text[k + 1:k + 2])
+                k += 2
+            elif text[k] == "`":
+                out.append((line_at(text, start), "".join(parts)))
+                return k + 1, "value"
+            elif text.startswith("${", k):
+                parts.append(HOLE)
+                holes.append([start, parts, 0])          # the template, its text so far, the braces open in it
+                return k + 2, "("
+            else:
+                parts.append(text[k])
+                k += 1
+        lost(start, "a template literal never ends")
+
+    i, prev = 0, "("                                     # prev: "value" when a value ended just before i
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            if j < 0:
+                lost(i, "a comment never ends")
+            i = j + 2
+        elif c in "'\"":
+            j, parts = i + 1, []
+            while j < n and text[j] != c:
+                if text[j] == "\n":
+                    lost(i, "a string runs past its line")
+                parts.append(text[j + 1:j + 2] if text[j] == "\\" else text[j])
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                lost(i, "a string never ends")
+            out.append((line_at(text, i), "".join(parts)))
+            i, prev = j + 1, "value"
+        elif c == "`":
+            i, prev = template(i + 1, i, [])
+        elif c == "/" and prev != "value":
+            j, in_class = i + 1, False                   # a regex literal, its classes and escapes, then its flags
+            while j >= n or text[j] != "/" or in_class:
+                if j >= n or text[j] == "\n":
+                    lost(i, "a regex literal runs past its line")
+                if text[j] == "\\":
+                    j += 1
+                elif text[j] in "[]":
+                    in_class = text[j] == "["
+                j += 1
+            i, prev = JS_FLAGS.match(text, j + 1).end(), "value"
+        elif c == "{" and holes:
+            holes[-1][2] += 1
+            i, prev = i + 1, "("
+        elif c == "}" and holes and not holes[-1][2]:
+            start, parts, _ = holes.pop()
+            i, prev = template(i + 1, start, parts)
+        else:
+            m = JS_IDENT.match(text, i) or JS_NUMBER.match(text, i)
+            if m:
+                i, prev = m.end(), "(" if m.group(0) in whole.JS_REGEX_AFTER else "value"
+            else:
+                if c == "}" and holes:
+                    holes[-1][2] -= 1
+                i, prev = i + 1, "value" if c in ")]" else "("
+    if holes:
+        lost(holes[-1][0], "a template literal's ${ never closes")
+    return sorted(out)
 
 
 def js_units(rel="dashboard/static/js/base.js"):
@@ -1118,7 +1307,8 @@ class TheOtherScriptsSayTheSame(unittest.TestCase):
                                    ("dashboard/static/js/video.js", r"\bVS\.port = d\.port \|\| (\d+);", "video"),
                                    ("dashboard/static/js/now.js", r"\bconst VID_NOW = \{[^;]*?\bport: (\d+)", "video"),
                                    ("dashboard/static/js/now.js", r"\bVID_NOW\.port \|\| (\d+)", "video"),
-                                   ("dashboard/static/js/now.js", r"'Listens on', '127\.0\.0\.1:(\d+), behind this cockpit'", "image")):
+                                   ("dashboard/static/js/now.js", r"\bconst IMG_NOW = \{[^;]*?\bport: (\d+)", "image"),
+                                   ("dashboard/static/js/now.js", r"\bIMG_NOW\.port \|\| (\d+)", "image")):
             m, where = one(rel, text_of(rel), pattern)
             p.same(f"{where} {pattern}", [int(m.group(1))], LANES[family(kind=kind)[0]]["ports"][:1])
         # the offline suite's guard: no test may connect to a port the box serves on
@@ -1235,15 +1425,8 @@ class TheCockpitSaysTheSame(unittest.TestCase):
         m, where = one(rel, text, r"^const isB12x = u => isNemotron\(u\)((?: \|\| u === [A-Z0-9_]+)*);$")
         p.same(f"{where} isB12x (with isNemotron's)", nemotron + [consts.get(c, c) for c in re.findall(r"u === ([A-Z0-9_]+)", m.group(1))],
                units_of(B12X))
-        # the b12x lanes in a sentence: b12xName's chain of names, the last for the lanes it does not test
-        m, where = one(rel, text, r"^const b12xName = u => (.*);$")
-        said = {consts[c]: s for c, s in re.findall(r"u === ([A-Z0-9_]+) \? '([^']+)'", m.group(1))}
-        rest = re.search(r":\s*'([^']+)'$", m.group(1))
-        said.update({u: rest.group(1) if rest else None for u in units_of(B12X) if u not in said})
-        for unit, s in said.items():
-            lane = LANE_OF_UNIT.get(unit)
-            if lane and s != f"the {LANES[lane]['title']} lane":
-                p.drift((rel, "b12xName", lane), s, f"{where} b12xName({unit}) {s!r}, the registry says 'the {LANES[lane]['title']} lane'")
+        # the b12x lanes in a sentence: b12xName names each by LANE_NAME, which the registry holds above
+        one(rel, text, r"^const b12xName = u => `the \$\{LANE_NAME\[u\]\} lane`;$")
         # the sources of the Logs view: the containers of the lanes that run in one (SGLang's and vLLM's,
         # not the venvs of the diffusion lanes), and the journals of every lane's unit, each by its name
         html = "dashboard/static/index.html"
@@ -1256,7 +1439,37 @@ class TheCockpitSaysTheSame(unittest.TestCase):
         css = "dashboard/static/css/cockpit.css"
         got, where = finds(css, text_of(css), r"--lane-([a-z0-9-]+):")
         p.same(f"{where} its --lane-<lane> hues", floor(got, f"{css} --lane-<lane>"), TURNS)
-        p.check(self, excuses(rel, "b12xName"))
+        p.check(self)
+
+    def test_the_refusals_of_its_vllm_lanes(self):
+        """What a vLLM lane has no route for (a flush, an abort, a fit), refused by the page before it asks and by
+        the server for any other caller: <LANE>_CANNOT beside <LANE>_UNIT, in the same words in both, and in the
+        name of that lane. Bolt and Super VL had one table, "The Nemotron lane has no cache flush route" (found
+        2026-11-10)."""
+        p, py, js = Problems(), self.PY, self.JS
+        units, tables = py_strings(py), {}
+        for node in tree_of(py).body:
+            name = node.targets[0].id if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) else ""
+            if name.endswith("_CANNOT") and name[:-len("_CANNOT")] + "_UNIT" in units:
+                tables[name] = LANE_OF_UNIT.get(units[name[:-len("_CANNOT")] + "_UNIT"])
+        p.same(f"{py} the lanes of its <LANE>_CANNOT tables", floor(list(tables.values()), f"{py} <LANE>_CANNOT"), VLLM)
+        got, where = finds(js, text_of(js), r"^const ([A-Z0-9_]+_CANNOT) = \{")
+        p.same(f"{where} its <LANE>_CANNOT tables, the server's", got, tables)
+        for name, lane in tables.items():
+            said, at = py_at(py, name)
+            page, line = js_const(js, name) if name in got else (None, "?")
+            if page != said:
+                p.append(f"{at} {name} {said}, and {js}:{line} {page}: one refusal, two sentences")
+            for action, why in said.items():
+                if lane and not why.startswith(f"The {LANES[lane]['title']} lane"):
+                    p.append(f"{at} {name}[{action!r}] {why!r}, the registry names its lane {LANES[lane]['title']!r}")
+        # and the b12x family's table of them, which the server reads: each lane's unit to its lane's own
+        node = py_assign(py, "B12X_CANNOT")
+        if not (isinstance(node, ast.Dict) and all(isinstance(x, ast.Name) for x in node.keys + node.values)):
+            raise NotFound(f"{py}:{getattr(node, 'lineno', '?')} B12X_CANNOT is not a {{<LANE>_UNIT: <LANE>_CANNOT}} this reads")
+        p.table(f"{py}:{node.lineno} B12X_CANNOT", {units.get(k.id, k.id): v.id for k, v in zip(node.keys, node.values)},
+                {UNIT[x]: next((t for t, lane in tables.items() if lane == x), None) for x in B12X})
+        p.check(self)
 
     def test_its_sudoers(self):
         p, rel = Problems(), "dashboard/sudoers-cockpit.template"
@@ -1355,8 +1568,9 @@ class TheNamesAreTheOfficialOnes(unittest.TestCase):
     """A lane's name in install.sh's messages is its official one (decision 1180), or for the image and
     video lanes their kind, the way install.sh names them ("the image lane"), their model after it: in
     lane_title, SERVING_LANE, the notes and the steps of the side lanes' installs, the 64 GB guards, and
-    in every message that names a lane by a proper name. The help, the comments, and the other scripts'
-    messages are not read here."""
+    in every message that names a lane by a proper name, in install.sh and in every other script of the
+    repo's root. Their comments and their here-documents (install.sh's help among them) are not read here.
+    And in every string of the cockpit, its Python's and its page's, their comments and docstrings not read."""
 
     SH = "install.sh"
 
@@ -1407,11 +1621,10 @@ class TheNamesAreTheOfficialOnes(unittest.TestCase):
         # the image and video lanes are named by what they are, in lower case or by a figure, which this leaves.
         titles = {f["title"] for f in LANES.values() if f["title"]}
         named = []
-        for m in re.finditer(r'^[ \t]*(?:\|\| )?(?:echo|step|die|printf)\b.*$', sh, re.M):
-            for n in re.finditer(r"\b[Tt]he ([A-Z][\w.-]*(?: [A-Z0-9][\w.-]*)*) lanes?\b", m.group(0)):
-                named.append(n.group(1))
-                if n.group(1) not in titles:
-                    p.append(f"{rel}:{line_at(sh, m.start())} says \"the {n.group(1)} lane\", which is no lane's official name")
+        for n, name in sh_messages(sh):
+            named.append(name)
+            if name not in titles:
+                p.append(f"{rel}:{n} says \"the {name} lane\", which is no lane's official name")
         floor(named, f"{rel} its messages that name a lane by a proper name", 2 * len(SIDE))
         # the 64 GB guard of each installer of its own names its lane
         for lane, f in LANES.items():
@@ -1423,6 +1636,52 @@ class TheNamesAreTheOfficialOnes(unittest.TestCase):
             if not self.said(lane, name):
                 p.append(f"{where} its 64 GB guard names {name!r}, the registry says {f['title']!r}")
         p.check(self, excuses(rel))
+
+    def test_the_other_scripts(self):
+        """The same rule in every other script of the repo's root: the lane installers' steps, the switch's
+        refusals, the uninstall's lines. Fourteen said "the Kolibri lane", "the Nemotron lane" and "the Nemotron
+        Super lane", and two "the Nemotron Bolt lane" (found 2026-11-10). Each text lane's installer of its own
+        names its lane, by that name."""
+        p, titles = Problems(), {f["title"] for f in LANES.values() if f["title"]}
+        scripts = floor(sorted(x.name for x in REPO.glob("*.sh") if x.name != self.SH), "the root's other scripts", len(SIDE) + 1)
+        named = {}
+        for rel in scripts:
+            for n, name in sh_messages(text_of(rel)):
+                named.setdefault(rel, []).append(name)
+                if name not in titles:
+                    p.append(f"{rel}:{n} says \"the {name} lane\", which is no lane's official name")
+        for lane in among(SIDE, TEXT):
+            rel = LANES[lane]["installer"]
+            if LANES[lane]["title"] not in named.get(rel, []):
+                p.append(f"{rel}: no message names \"the {LANES[lane]['title']} lane\", its own")
+            # and the steps that remove it, or say it is installed or its image ready, name it and no other lane
+            steps, where = finds(rel, text_of(rel), r'^\s*step "(?:Removing|Done:) the (.+?) lane\b')
+            for name in floor(steps, f"{rel} its steps \"Removing the <name> lane\" and \"Done: the <name> lane\"", 3):
+                if name != LANES[lane]["title"]:
+                    p.append(f"{where} a step of {lane}'s installer names \"the {name} lane\", the registry says {LANES[lane]['title']!r}")
+        floor(named.get("switch-model.sh", []), "switch-model.sh its messages that name a lane by a proper name")
+        p.check(self)
+
+    def test_the_cockpit(self):
+        """The same rule in every string of the cockpit, its Python's (dashboard/*.py) and its page's
+        (dashboard/static/js/*.js): one sentence said "the Nemotron lane" for Bolt and for Super VL, others "a
+        Nemotron lane is serving", "none on the Nemotron lanes", "the Kolibri lane", "the Ornith lane" and "The 176B
+        Flash-Next lane" (found 2026-11-10). Each vLLM lane is named so in both, in its refusals at least."""
+        p, titles = Problems(), {f["title"] for f in LANES.values() if f["title"]}
+        named = {}
+        for kind, files in (("Python", sorted((REPO / "dashboard").glob("*.py"))),
+                            ("page", sorted((REPO / "dashboard" / "static" / "js").glob("*.js")))):
+            for path in floor(files, f"the cockpit's {kind} files", 2):
+                rel = path.relative_to(REPO).as_posix()
+                for n, s in floor(py_said(rel) if kind == "Python" else js_strings(text_of(rel)), f"{rel} its strings"):
+                    for said, name in lanes_named(s):
+                        named.setdefault(kind, set()).add(name)
+                        if name not in titles:
+                            p.append(f"{rel}:{n} says {said!r}, which is no lane's official name")
+            lacks = [LANES[x]["title"] for x in VLLM if LANES[x]["title"] not in named.get(kind, ())]
+            if lacks:
+                p.append(f"no string of the cockpit's {kind} names \"the <name> lane\" of {lacks}")
+        p.check(self)
 
 
 class TheReadersReadWhatTheyClaim(unittest.TestCase):
@@ -1453,6 +1712,57 @@ class TheReadersReadWhatTheyClaim(unittest.TestCase):
             with self.subTest(needle), self.assertRaises(NotFound):
                 sh_case_with(sh, '"$c"', needle, "t")
 
+    def test_a_message_is_read_wherever_its_command_stands_and_nothing_else(self):
+        sh = ('[ -f x ] || die "the Alpha lane is not installed"\n'
+              '# echo "the Beta lane, in a comment"\n'
+              "cat <<'HLP'\necho \"the Gamma lane, in a help\"\nHLP\n"
+              'read -r a <<< "the Delta lane, in a here-string"\n'
+              '  step "Done: the Epsilon 1.5 lane\'s image is ready"\n'
+              'X="the Zeta lane, in no message"\n'
+              'echo "the image lane, the 27B lane"\n'
+              'echo "a Theta lane, and the 176B Iota lanes"\n')
+        self.assertEqual(sh_messages(sh), [(1, "Alpha"), (7, "Epsilon 1.5"), (10, "Theta"), (10, "176B Iota")])
+        with self.assertRaises(ValueError):
+            sh_messages('cat <<EOF\necho "the Eta lane"\n')
+
+    def test_a_script_is_read_past_what_hid_a_message_and_what_was_none(self):
+        sh = ("python3 - <<'PY' \\\n  || echo \"the Alpha lane serves without it\"\nprint('the Beta lane, in the body')\nPY\n"
+              'die "x"   # the Gamma lane, in a comment at the end of the line\n'
+              'BIT=$((1<<SHIFT)); echo "the Delta lane"\n'
+              'echo "on the SGLang lanes, a Qwen lane, an SGLang lane and the vLLM lanes"\n'
+              'echo "a # in a string, then the Epsilon lane"   # and a comment\n')
+        self.assertEqual(sh_messages(sh), [(2, "Alpha"), (6, "Delta"), (8, "Epsilon")])
+        self.assertEqual(lanes_named("The SGLang lanes, an SGLang lane, a Qwen lane, the Zeta lane, the Qwen lane's image"),
+                         [("the Zeta lane", "Zeta"), ("the Qwen lane", "Qwen")])
+        more = ('(( MASK = 1 << BIT )); echo "the Eta lane"\n'
+                'echo "$(printf \'%s\' " #") the Theta lane"\n'
+                'true &# the Iota lane, a comment\n'
+                "echo $'it\\'s' # the Kappa lane, a comment\n"
+                'echo "${#NAMES[@]} and $# of the Lambda lane"\n')
+        self.assertEqual(sh_messages(more), [(1, "Eta"), (2, "Theta"), (5, "Lambda")])
+
+    def test_the_cockpits_strings_are_read_as_its_code_holds_them(self):
+        TREES["<said>"] = ast.parse('"""the Alpha lane, a docstring"""\n'
+                                    "def f(x):\n"
+                                    '    """the Beta lane, a docstring"""\n'
+                                    '    "the Gamma lane, a string alone"\n'
+                                    "    # the Delta lane, a comment\n"
+                                    '    return f"{x} is the Epsilon lane, " "said whole"\n'
+                                    'Z = {"k": "the Zeta lane"}\n')
+        try:
+            self.assertEqual(py_said("<said>"), [(6, "{} is the Epsilon lane, said whole"), (7, "k"), (7, "the Zeta lane")])
+        finally:
+            del TREES["<said>"]
+        js = ("const a = 'the Alpha lane', b = \"it's the Beta lane\"; // the Gamma lane, a comment\n"
+              "/* the Delta lane,\n   a comment */ const r = /['\"`/]/g.test(s) ? x / 2 / y : `the ${n ? `Epsilon ${m}` : 'Zeta'} lane`;\n"
+              "const t = `the Eta lane, ${ {k: 'Theta'}.k }\nover two lines`; if (s) return /'/.test(s);\n")
+        self.assertEqual(js_strings(js), [(1, "it's the Beta lane"), (1, "the Alpha lane"), (3, "Epsilon {}"), (3, "Zeta"),
+                                          (3, "the {} lane"), (4, "Theta"), (4, "the Eta lane, {}\nover two lines")])
+        for bad in ("const s = 'never ends;", "const s = 'past\nits line';", "const t = `never ${ends};", "const t = `never",
+                    "const t = `a ${never", "const r = /never ends;\n", "/* never ends"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                js_strings(bad)
+
     def test_a_javascript_table_is_read_whole_or_not_at_all(self):
         js = "const T = {[U27]: 'a', b: [1, \"c's\"], 'd-e': {f: X}, // note\n};"
         self.assertEqual(js_value(js, js.index("{"))[0], {"U27": "a", "b": [1, "c's"], "d-e": {"f": "X"}})
@@ -1479,13 +1789,17 @@ class TheReadersReadWhatTheyClaim(unittest.TestCase):
         self.assertEqual(list(p), ["f.sh:2-4: missing ['2'], extra ['3']"])
 
     def test_an_excuse_holds_one_value_and_an_unused_one_fails(self):
-        key = next(iter(TO_DECIDE))
-        p = Problems()
-        p.drift(key, TO_DECIDE[key], "excused")
-        p.drift(key, "another value", "not excused")
-        self.assertEqual(list(p), ["not excused"])
-        with self.assertRaises(AssertionError):
-            Problems().check(self, [key])
+        # an excuse of its own: TO_DECIDE may hold none
+        key = ("f.sh", "a construct", "a lane")
+        with mock.patch.dict(TO_DECIDE, {key: "the value found"}):
+            p = Problems()
+            p.drift(key, "the value found", "excused")
+            p.drift(key, "another value", "not excused")
+            self.assertEqual(list(p), ["not excused"])
+            self.assertEqual(p.excused, {key})
+            with self.assertRaises(AssertionError):
+                Problems().check(self, [key])
+        self.assertNotIn(key, TO_DECIDE)
 
 
 if __name__ == "__main__":

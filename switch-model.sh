@@ -127,7 +127,7 @@ KOLIBRI_UNIT_NAME="qwen38-kolibri.service"
 # exact-argv sudoers allowlist names, as the image unit is.
 KOL_STAGE="$CONFIG_DIR/qwen38-kolibri.service.switch-stage"
 if [ "$CHOICE" = "kolibri" ] || [ "$CHOICE" = "kolibri-nvfp4" ]; then
-  [ -f "$KOLIBRI_UNIT" ] || die "the Kolibri lane is not installed on this box (no $KOLIBRI_UNIT). Install it once: ./install.sh --with-kolibri (about 102 GB)"
+  [ -f "$KOLIBRI_UNIT" ] || die "the Kolibri-1 lane is not installed on this box (no $KOLIBRI_UNIT). Install it once: ./install.sh --with-kolibri (about 102 GB)"
   # The lane's two checkpoints, their pinned revisions, memory shares and sizes, from
   # install-kolibri.sh, the one place they are declared (the shares and sizes were copied
   # here by hand, and a share tuned there came back at the next switch: found in review,
@@ -145,7 +145,7 @@ if [ "$CHOICE" = "kolibri" ] || [ "$CHOICE" = "kolibri-nvfp4" ]; then
   fi
   KOL_IMAGE="$(grep -m1 -oE 'qwen38-kolibri:[^ ]+' "$KOLIBRI_UNIT" || true)"
   [ -n "$KOL_IMAGE" ] && docker image inspect "$KOL_IMAGE" >/dev/null 2>&1 \
-    || die "the Kolibri lane's image (${KOL_IMAGE:-none named in its unit}) is missing: ./prepare-lane.sh kolibri builds it (no sudo; its first Load from the cockpit runs it), then switch again"
+    || die "the Kolibri-1 lane's image (${KOL_IMAGE:-none named in its unit}) is missing: ./prepare-lane.sh kolibri builds it (no sudo; its first Load from the cockpit runs it), then switch again"
   KOL_HF="$(unit_hf_cache "$KOLIBRI_UNIT")"
   KOL_HF="${KOL_HF:-$HF_CACHE}"
   printf '\n\033[1;36m── Verifying %s @ %s in the cache (resumable)\033[0m\n' "$KOL_MODEL" "${KOL_REV:0:12}"
@@ -966,7 +966,9 @@ if [ "$CHOICE" = "video" ]; then
   # comes off the need, so a complete cache (this box's normal state) needs only
   # the floor and downloads nothing; the number is install-video.sh's own.
   VID_WANT_GB="$(grep -m1 -oE '^WEIGHTS_GB=[0-9]+' "$REPO_DIR/install-video.sh" | cut -d= -f2 || true)"
-  VID_WANT_GB="${VID_WANT_GB:-145}"
+  # install-video.sh's number when its line cannot be read: GiB, as it counts them since v1.20.0 (this
+  # said 145, the GB it counted before)
+  VID_WANT_GB="${VID_WANT_GB:-135}"
   VID_HAVE_B="$({ du -s --apparent-size -B1 "$VID_MODEL_DIR/blobs" 2>/dev/null || true; } | cut -f1)"
   VID_WANT_GB=$((VID_WANT_GB - ${VID_HAVE_B:-0} / 1073741824)); [ "$VID_WANT_GB" -ge 10 ] || VID_WANT_GB=10
   # The two caches the runtime writes at its first start (lanes.sh), with the checkpoint on the

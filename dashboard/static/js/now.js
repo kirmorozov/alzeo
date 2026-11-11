@@ -312,7 +312,7 @@ function renderActivity(){
   }
   if (unit === IMAGE_UNIT){
     setText('act-title', 'Images'); setText('act-v', IMG_NOW.label ? 'Busy' : 'Idle'); setText('act-k', IMG_NOW.label || 'one image at a time on this lane');
-    facts(fx, [['Up', e.elapsed ? fmtDur(e.elapsed) : null], ['Listens on', '127.0.0.1:30020, behind this cockpit']]);
+    facts(fx, [['Up', e.elapsed ? fmtDur(e.elapsed) : null], ['Listens on', `127.0.0.1:${IMG_NOW.port || 30020}, behind this cockpit`]]);
     return;
   }
   // a text lane
@@ -331,7 +331,7 @@ on('canary', d => {
   let txt;
   if (d.skipped && !textReady()) txt = imageServing() ? 'no text engine (the image lane serves)' : videoServing() ? 'no text engine (the video lane serves)' : 'no text engine';
   // the Kolibri lane is not probed: the last Qwen lane's result read as its own (review, 2026-10-14)
-  else if (d.skipped && (servingEngine() || [])[0] === KOLIBRI_UNIT) txt = `not run: ${d.why || 'the Kolibri lane is checked by its own /health'}`;
+  else if (d.skipped && (servingEngine() || [])[0] === KOLIBRI_UNIT) txt = `not run: ${d.why || 'the Kolibri-1 lane is checked by its own /health'}`;
   else if (d.skipped && isB12x((servingEngine() || [])[0])) txt = `not run: ${d.why || b12xName((servingEngine() || [])[0]) + ' is checked by its own /health'}`;
   else if (d.skipped && d.last_ok == null) txt = 'not yet run';
   else if (d.fails > 0) txt = `${d.fails} failure${d.fails > 1 ? 's' : ''} in a row: ${d.last_err || ''}`;
@@ -458,7 +458,7 @@ function renderPair(){
 
 // the facts the spine and the video/image studios share, filled by their own views
 const VID_NOW = {label: '', run: null, port: 30022};
-const IMG_NOW = {label: ''};
+const IMG_NOW = {label: '', port: 30020};
 
 afterApply(() => {
   renderServing(); renderPool(); renderRack(); renderActivity(); renderVitals(); renderPair();

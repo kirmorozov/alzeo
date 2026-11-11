@@ -126,6 +126,174 @@ switch after keeps it, and `QWEN38_EXPERTS=1` takes it out.
 at an install and at a switch, and lists its files among what the engine reads at its start, so a copy changed under
 a serving lane is a restart owed like the unit's own changes. A lane installed before this release serves on without
 the mount until its next Load from this checkout and a restart.
+## v1.46.3 (2026-11-10): the cockpit's notes can be hidden, the Traffic view shows the speed of the engine, and its list of connections comes last on a phone
+
+**Hide on a note.** An informational or orange note in the strip at the top of the cockpit ("The clone moved on since the
+last install: ...") has a Hide button. What it hides is kept as a hash of the note's words, title and sentence, in this
+browser's localStorage (every read and write guarded: with the storage blocked, the note stays hidden for the page view
+and comes back at the next load). A note whose words change, a new commit or a new version, has another hash and shows
+again; a countdown in a sentence ("answers again in 2 min") is no part of the hash. "N hidden" at the end of the strip
+brings them back and clears what was kept. Errors, warnings, and the banner of the installer running have no Hide: they
+are about now.
+
+**Speed tiles.** The Traffic view has three tiles beside the running-connections counter, each with its own sparkline:
+prefill (prompt tokens per second), decode (generated tokens per second) and the aggregate of both. The server computes
+them at the 1 s tier from the engine's own token counters (`vllm:prompt_tokens_total`, `vllm:generation_tokens_total`,
+the SGLang names beside them) as a difference over a sliding window of 10 s (`engine_metrics.Rate`), so a 100K prompt
+that lands in chunks of 4096 tokens shows its mean and not each chunk. Idle reads 0; with no text engine, or no read of
+its counters, a dash. Counters that went back, or another engine, start the window again.
+
+**The list of connections last on a narrow screen.** Under 980 px the Traffic view reads: the counters, the speed
+tiles, the last 5 minutes, the abandoned requests, and the list of relayed requests at the end. The wide layout is as it
+was (the order is CSS, not markup).
+
+## v1.46.2 (2026-11-10): the CI of a push takes a little over nine minutes where it took thirty, and the pass it no longer makes runs every night and before a release
+
+**Thirty minutes, and where they went.** A full run of the CI took 30 minutes on the reference box and 32 on GitHub,
+against 12 on 2026-10-28. Measured on 2026-11-10 with every unittest module of `tests/` in one process: 3,034 tests in
+1,792 s, of which `tests/test_proxy_pair.py` took 892 s for its 498 tests, and 82% of the time went to tests of 2 s and
+more, which wait for real delays. Three jobs were bound by that one file: `single`, which ran every module in one
+process (1,808 s), `coverage`, which ran its 27 files one after the other and then the cockpit's floors (1,281 and 338
+s), and `suite`, where the file started when its turn came by name (1,177 s).
+
+**The pair's tests are four files.** `tests/test_proxy_pair.py` is cut by class, each class copied line for line: it
+keeps the two boxes that serve two models, the pair's pieces and the lane names; `tests/test_proxy_pair_inprocess.py`,
+`tests/test_proxy_pair_one_model.py` and `tests/test_proxy_pair_one_model_inprocess.py` take the three other classes,
+and `tests/pairbox.py` holds what the four share and no test. A twin names its base class by its module, as unittest
+runs every TestCase a module names and would run that class's cases a second time in the twin's file. The check that a
+twin declares every case of its class is one test in each twin's file where it was one test for both: 499 tests where
+there were 498.
+
+**The modules run in groups, side by side.** `single` runs `tests/run_single.py`: the same modules in groups, each
+group one process, four at a time. Each of the pair's four files is a group, and the others are dealt in turn into two.
+Every module is in one group and one only. `coverage` runs its files four at a time, the cockpit's floors are a job of
+their own, `coverage-cockpit`, beside it, and `suite` starts its longest files first.
+
+**What a push's CI no longer sees, and where it is seen.** What a test module leaves to the modules after it (a
+variable of the environment, the directory, `sys.path`, a thread, a signal handler) shows only where they share a
+process. A run in groups sees it within a group. Between two groups it is seen by the pass that runs every module in
+one process, `tests/run_single.py --one-process`, half an hour: `.github/workflows/nightly.yml` runs it every night,
+and a release runs it on the box before it is pushed, as `ci-local.sh` now runs the workflow file that
+`CI_LOCAL_WORKFLOW` names. `tests/test_run_single.py` shows that limit as it is: two modules of two groups, one leaving
+a variable the other refuses, pass in groups and fail in one process.
+
+**Two checks of that pass made true.** A test may be skipped for a listed reason only. unittest writes a reason between
+double quotes when it holds an apostrophe, and the check read single quotes alone: it never saw 85 of the 95 reasons
+`tests/` gives, 83 of them a case that only the in-process twin of its class runs. Both forms are read, and that reason
+is allowed in the class whose proxy is a process of its own and refused in a twin. And one process says once how many
+tests it ran: a second count, from a test that runs the tests again, fails the run, as it did in the step this
+replaces. Both were found by an independent review of the branch, which also found that the one-process pass could not
+pass as first written: every step inherited `CI_LOCAL_WORKFLOW`, and the cases of `tests/test_ci_local.py` ran their
+planted `ci-local.sh` on a workflow file that was not there. A step no longer gets the variable, as on a runner.
+
+**Measured.** Five full runs on the reference box before the review's corrections, each of 53 steps, none failed, none
+skipped: 590 s with the groups in their first order, then 557, 559, 558 and 558 s, the length of `suite` (`cockpit` 513
+to 516 s, `coverage` 503, `single` 503, `coverage-cockpit` 343 to 345, `fuzz` 233 to 236, `static` 57 to 58). `single`
+took 1,808 s before.
+
+**Tests.** `tests/test_run_single.py` proves each fact of a run on a planted tree, 16 tests: a failing test, a module
+that cannot be imported, fewer tests run than declared, two counts from one process, a skip for a reason nobody listed
+in either form of quotes, the twin's reason in a class and in its twin, the SDK missing on a runner and off it, and the
+limit above. Ten mutations of its first version are each caught; of seven of the review's lines, six are caught and the
+seventh changes nothing. Two new cases of `tests/test_ci_local.py` are red on the code before. The cut was compared by
+the syntax tree: every method of every class and every function and constant of the file is where it went with the body
+it had, but for the two base classes named by their module and the twin's check.
+
+**What changes on a box.** Nothing that serves or installs: `tests/`, `.github/workflows/`, `ci-local.sh`, `TESTING.md`
+and `CONTRIBUTING.md`. No script of the installer, no unit, no template, no file of the cockpit.
+
+**What an update does.** The update runs get.sh, which starts the installer, as at every update. Nothing it installs
+changed in this version.
+
+**After the push.** The pull request ran GitHub's CI on its runners before `main` moved: 95 steps, none skipped, in 10
+min 26 s, where the last runs of `main` took 32 minutes (`suite` 610 s, `cockpit` 573, `single` 547, `coverage` 514,
+`coverage-cockpit` 397, `fuzz` 378, `static` 76). Merged as a fast-forward, `main` passed the same way on 5f2aa81: 95
+steps, none skipped, 10 min 27 s. On the reference box the final tree passed the CI in 559 s and, beside it, the pass
+in one process in 1,819 s. On GitHub that pass, started once by hand without waiting for the night, passed in 32 min 13
+s. The reference box updated in 1 min 35 s by the README's command (get.alzeo.ai): the 27B and the proxy kept running,
+the cockpit restarted and serves v1.46.2, no unit changed, and of the configuration only the record of what is
+installed. On the 27B the production checks passed, and so did the eight real clients: Claude Code, opencode, Hermes,
+pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The cockpit showed no banner on any of
+its views, and no JavaScript error. Nothing that serves changed, so the client matrix was not run again.
+
+## v1.46.1 (2026-11-10): the cockpit and the lane installers name each lane by its official name, a size is one figure in its unit, and a 64 GB box with no cockpit keeps opencode's limits fitted
+
+**Each lane by its official name, in the cockpit too.** The cockpit said `the Nemotron lane` for Nemotron 3.5 Bolt and
+for Nemotron 3.5 Super VL alike, `a Nemotron lane is serving`, `none on the Nemotron lanes`, `the Ornith lane`, `the
+Kolibri lane` and `The 176B Flash-Next lane`, beside the official names of its Lanes view. Each message now names the
+lane it is about: the refusals of a cache flush, an abort and a fit of opencode's limits (Super VL has its own, in the
+server and in the page), the canary's line, the lines that say what does not apply to a vLLM lane, the reason System
+One is not answered, the notes of the targets. `Kolibri checkpoint` is `Kolibri-1 checkpoint` in the installer's list
+of settings and in the Settings view. The buttons keep their short labels (Bolt, Super VL, FP4-Local), and the lanes
+named in lower case keep theirs (`the flash lane`, `the image lane`).
+
+**And in the lane installers and the switch.** v1.46.0 gave the official names to the messages of `install.sh`. Sixteen
+messages of the other scripts kept the short ones: the steps of `install-kolibri.sh`, `install-nemotron.sh` and
+`install-nemotron-super.sh` (`Removing the Nemotron lane`, `Done: the Kolibri lane is installed`), two refusals of
+`switch-model.sh`, and `the Nemotron Bolt lane's` image in Super VL's installer. They say Kolibri-1, Nemotron 3.5 Bolt
+and Nemotron 3.5 Super VL. The help of `install.sh`, some short labels of its summary and the documentation's prose
+still use short names.
+
+**A size is one figure in its unit.** Three sizes were said two ways. The 27B's NVFP4 weights were 22.0 GB in
+`boxmem.py` and 21 GB in the cockpit, the README and `install.sh`, for 21.945 GB measured: 21.9 everywhere, beside
+FP8's 30.9. The README's install table and its Quickstart gave the Qwen3.8 Flash-Next FP4-Local checkpoint as 103, the
+room its fetch asks in GB, where the installer and the cockpit said 102 (102.26 measured): both say 102.3 and 18.2,
+rounded up to their 121, and the installer says that its 103 is that measure rounded up. The cockpit, the README and
+the image lane's page gave that lane's 31 GiB of weights as GB (33.1 GB measured, which is 30.9 GiB). The cockpit's
+note on the FP8 target also said `around 200,000 fewer tokens of context`, an extrapolation `install.sh` dropped on
+2026-09-02 for the measure: 771,139 tokens against 863,398 on the same 1M unit.
+
+**A 64 GB box with no cockpit whose Bolt does not come up.** When Bolt's first load fails, the installer switches back
+to the 27B, and that switch writes the 27B's nominal opencode limits (173,000 and 64,000 at its native window) over the
+pair fitted earlier to its pool, some 59,625 tokens on a 64 GB box. A cockpit that runs fits them again once the 27B
+answers, unless its autofit was turned off. With none (`--no-cockpit`, or a cockpit that is stopped), nothing did, and
+opencode asked for nearly four times the pool until the next update. The installer now waits for the 27B, 20 minutes at
+most, and fits them, and says so when the 27B does not answer in time. It only waits: it starts and stops no lane and
+prompts for no sudo, so a 27B that systemd starts again is left to come up. After a preparation of Bolt that failed
+nothing had moved, and nothing is done. Found by reading the code: no 64 GB box was at hand, and the correction was
+proved on the installer's own ending with stand-ins, not on such a box.
+
+**Smaller things.** The switch to the video lane asked 145 of free room when it could not read `install-video.sh`, the
+GB that installer counted before v1.20.0: it asks the 135 GiB the installer asks. The Now view wrote `127.0.0.1:30020`
+of the image lane whatever port its unit gives it: it says the port the Image view was told. `docs/pi.md` had no line
+for Ornith 1.5 122B, whose effort table `pi-gen.py` writes: it has one. Run while a vLLM lane serves,
+`oc-fit-limits.py` said `no engine to read ... start one first`: it says that the engine is not SGLang and that there
+is nothing to fit to its pool, with the same return code. And `.github/FUNDING.yml` gives the repository a Sponsor
+button that leads to https://alzeo.ai/support/, the page that says what helps: there is no donation link today.
+
+**Tests.** `tests/test_lane_registry.py` now reads the messages of every shell script of the repo's root and every
+string of the cockpit's Python and of its page, comments and docstrings aside: a message that says `the <Name> lane`
+names an official one (a family said as one, `the SGLang lanes` or `a Qwen lane`, aside), the refusals are the same
+sentences in the server and in the page, and each lane installer names its own lane. Its six excuses for the cockpit's
+names are gone. `tests/test_docs_facts.py` holds each of the three sizes to one figure in its unit.
+`tests/test_spark_64.py` runs the 64 GB ending with no cockpit: Bolt's start fails, its switch fails, the 27B does not
+answer in time, the preparation fails, a 27B that systemd starts again meanwhile is never stopped, and the wait lasts
+what the run says. A page test answers `/api/image` with another port, another loads each vLLM lane and reads its own
+name, `tests/test_switch_room.py` runs the switch with no `install-video.sh` to read, `tests/test_pi_gen.py` holds a
+line of `docs/pi.md` to each lane of the generator's table, and `tests/test_oc_fit_limits.py` starts a server of its
+own that answers 404. Each fails on the code before. The five browser checks that start a cockpit of their own now
+close the video lane's port as they closed the image lane's: under a probe that refuses every serving port, the touch
+check made one contact with 127.0.0.1:30022 before, and none after.
+
+**What changes on a box.** The cockpit (`cockpit.py`, five files of its page, `conformity.py`), messages of the three
+lane installers and of `switch-model.sh`, the 64 GB ending of `install.sh`, the video switch's fallback, and what
+`oc-fit-limits.py` prints under a vLLM engine. Comments only in `boxmem.py`, `lifecycle.py` and
+`install-flash-local.sh`, and the header of `install-image.sh`, which is also its help. No unit, template or image
+changes.
+
+**What an update does.** The update runs get.sh, which starts the new installer. The cockpit restarts and serves the
+new page. The engine and the proxy keep running, as nothing they read changed.
+
+**After the push.** GitHub's CI passed on 619d2f3, 89 steps, none skipped. The reference box updated in 1 min 34 s by
+the README's command (get.alzeo.ai): the 27B and the proxy kept running, the cockpit restarted and serves v1.46.1, and
+no lane's unit changed. The installer's fit raised opencode's limits to the pool the 27B has had since its restart of
+the afternoon, 902,659 tokens: a context of 560,000 tokens where the file said 492,000. The Agent tab's server kept
+running, as v1.45.4 has it. On the 27B the production checks passed, and so did the eight real clients: Claude Code,
+opencode, Hermes, pi, the OpenAI and Anthropic SDKs, fetch under Node and under Bun, and LiteLLM. The cockpit showed no
+banner on any of its views, and no JavaScript error. No engine, proxy, template or unit file changed, so the client
+matrix was not run again. Two things of this version are still held by its tests only: the cockpit's phrases for a vLLM
+lane, which no vLLM lane was loaded to show in a browser, and the ending of a 64 GB box with no cockpit, proved with
+stand-ins.
 
 ## v1.46.0 (2026-11-10): the installer and the cockpit say that a star helps, and a 64 GB box's first install no longer says two false things
 

@@ -255,6 +255,8 @@ img,svg,video,canvas{display:block; max-width:100%}
 /* lines a banner shows one under the other (the clone's commits), between its title and its sentence */
 .banner .blist{margin:var(--s-1) 0 var(--s-2); padding-left:var(--s-4)}
 .banner .blist li{overflow-wrap:anywhere}
+.banner:has(> .btn){grid-template-columns:auto 1fr auto}   /* a note that can be hidden: its Hide at the end */
+.banner-hidden{display:flex; align-items:center; gap:var(--s-3); justify-content:flex-end; color:var(--fg-3); font-size:var(--t-13)}
 .banner.err{border-color:color-mix(in srgb, var(--bad) 50%, transparent); background:color-mix(in srgb, var(--bad) 10%, var(--ink-1))}
 .banner.info{border-color:var(--rule-2); background:rgba(255,255,255,.06); color:var(--fg-2)}
 .banner.orange{border-color:color-mix(in srgb, var(--orange) 50%, transparent); background:color-mix(in srgb, var(--orange) 10%, var(--ink-1))}
@@ -865,6 +867,10 @@ body.agentmax .view{animation:none}
   .minipool{display:none}
   .g2{grid-template-columns:minmax(0,1fr)}
   .span2{grid-column:auto}
+  /* Traffic on a narrow screen: the counters and the speed tiles, then the verdicts, and the list of
+     connections last, however long it is (the grid is one column from 1100 px, the list its first
+     child on a wide screen: order moves it, the markup and the wide layout stay) */
+  #tr-grid > #tr-feed{order:2}
 }
 @media (max-width:720px){
   .stage{padding:var(--s-5) max(var(--s-4), var(--sa-r)) calc(var(--s-9) + 40px + var(--sa-b)) max(var(--s-4), var(--sa-l))}

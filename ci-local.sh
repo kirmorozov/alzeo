@@ -9,6 +9,9 @@
 # have ended, and only when every one of them passed, as on GitHub. A fragment, and any
 # run with CI_LOCAL_SERIAL=1, runs every step it takes in this checkout as it is, one after
 # the other.
+# CI_LOCAL_WORKFLOW names another workflow file than .github/workflows/ci.yml, run the same way:
+# CI_LOCAL_WORKFLOW=.github/workflows/nightly.yml ./ci-local.sh is the night's pass, every unittest
+# module of tests/ in one process, which a release runs here before it is pushed.
 # Exit status: 1 when a step failed, 2 when a full run finds changes nobody committed, 3
 # when nothing ran (a filter that matched no step, or only skipped ones), 0 otherwise.
 set -u
@@ -24,7 +27,7 @@ say = threading.Lock()
 # Each step's wall time, said on its line and summed up at the end: where a run's hour goes
 # is the first thing to know before making it shorter (2026-10-24).
 took, t_run = [], time.monotonic()
-d = yaml.safe_load(open(".github/workflows/ci.yml"))
+d = yaml.safe_load(open(os.environ.get("CI_LOCAL_WORKFLOW") or ".github/workflows/ci.yml"))
 ok = fail = skip = 0
 # A run stopped through its process group gets SIGTERM, which ended python without its
 # finally blocks: the step's throwaway HOME, with the keys the cockpit tests write, and
@@ -119,7 +122,12 @@ def run_job(job, steps, cwd):
         # by whatever ran next
         tmp = os.path.join(home, "tmp")
         os.mkdir(tmp)
-        env = {**os.environ, **test_python, "HOME": home, "TMPDIR": tmp, "CI_LOCAL_CALLED": called,
+        # CI_LOCAL_WORKFLOW names the workflow to this run and is no part of a step's environment, as a
+        # runner has no such variable: tests/test_ci_local.py, a step of the night's pass, handed it to the
+        # ci-local.sh of each repository it plants, which looked there for a nightly.yml they do not have
+        # (13 failures, found in review on 2026-11-10 before that pass had run once)
+        env = {**{k: v for k, v in os.environ.items() if k != "CI_LOCAL_WORKFLOW"}, **test_python,
+               "HOME": home, "TMPDIR": tmp, "CI_LOCAL_CALLED": called,
                "PATH": stubs + os.pathsep + os.environ.get("PATH", "")}
         r, tools, dt = None, [], 0.0
         try:
