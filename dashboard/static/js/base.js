@@ -1266,6 +1266,13 @@ function drawSpark(canvas, name, color, yMax, opts = {}){
   c.strokeStyle = color; c.lineWidth = 2; c.lineJoin = 'round'; c.stroke();
   const [lx, ly] = at(data[data.length - 1], data.length - 1);
   c.fillStyle = color; c.beginPath(); c.arc(lx - 2, ly, 3, 0, 6.284); c.fill();
+  // more lines on the same chart (opts.lines: {name, color, yMax}), each on its own scale, a line and no fill
+  (opts.lines || []).forEach(l => {
+    const d2 = SERIES[l.name] || []; if (d2.length < 2) return;
+    const m2 = l.yMax || Math.max(...d2, 1e-9);
+    c.beginPath(); d2.forEach((v, i) => { const x = i * (w / (d2.length - 1)), y = h - Math.min(v / m2, 1) * (h - 8) - 4; i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.strokeStyle = l.color; c.lineWidth = 1.5; c.lineJoin = 'round'; c.stroke();
+  });
 }
 
 // ── collectors every view shares ───────────────────────────────────────────────
