@@ -84,6 +84,15 @@ and both changes were run against the image's own spec classes on the box before
 in the engine's environment is the kill switch for the block (`off` keeps the image's, a number forces one that
 must divide the target's block); the split has none. Nothing changes for the MTP target or for any method but
 `dflash`, and a vLLM without the names the hook needs is logged and left alone.
+**The engine's share of the GPU's memory is the box's to choose.** `FLASH_LOCAL_MEMORY_SHARE=0.85 ./switch-model.sh
+flash-local` (or `flash-local-dflash2`) renders that share into the unit's `--gpu-memory-utilization`, where the
+card's 0.8 stood fixed; a plain switch after keeps it, and a value outside 0.5 to 0.92 is refused by name before
+anything is fetched or rendered. What the share adds past the weights is KV cache, about 53K tokens of the 262K
+window per GiB and 1.2 GiB per 0.01 of share on a 128 GB box, which is more sessions' prefixes kept between their
+turns and so less prefill; what it takes is the memory the box keeps, 13 GB at 0.8, where the page cache holds the
+PLE table the engine reads at every token. Measured on the reference box, 2026-11-10: 0.8 left 17.7 GiB for 941,957
+tokens.
+
 ## Unreleased: the cockpit's Experts view, the routing of Qwen Next's experts as it happens
 
 **A heatmap over the model's stack.** The flash-local lane's engine now carries a small vLLM plugin of this repo,

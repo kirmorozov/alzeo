@@ -372,6 +372,39 @@ class TheStagedUnit(unittest.TestCase):
 
 
 
+class TheMemoryShare(unittest.TestCase):
+    """FLASH_LOCAL_MEMORY_SHARE: the engine's share of the GPU's memory, the card's 0.8 unless the box
+    chooses one, kept across a plain switch like the target, refused outside 0.5 to 0.92."""
+
+    def setUp(self):
+        self.box = Box()
+
+    def tearDown(self):
+        shutil.rmtree(self.box.t, ignore_errors=True)
+
+    def share(self):
+        m = re.search(r"--gpu-memory-utilization (\S+)", self.box.out.read_text())
+        return m.group(1) if m else None
+
+    def test_the_cards_share_unless_the_box_chooses_one_which_a_plain_switch_keeps(self):
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual((rc, self.share()), (0, "0.8"), out)
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE="0.85")
+        self.assertEqual((rc, self.share()), (0, "0.85"), out)
+        (self.box.units / "qwen38-flash-local.service").write_text(self.box.out.read_text())   # installed at 0.85
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
+        self.assertEqual((rc, self.share()), (0, "0.85"), "a plain switch keeps the box's share")
+        rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE="0.8")
+        self.assertEqual((rc, self.share()), (0, "0.8"), "named again, the card's")
+
+    def test_a_share_outside_the_box_is_refused_by_name(self):
+        for bad in ("0.95", "0.4", "85", "abc", "0.855"):
+            rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE=bad)
+            self.assertNotEqual(rc, 0, bad)
+            self.assertIn("FLASH_LOCAL_MEMORY_SHARE takes a share", out, bad)
+            self.assertFalse(self.box.out.exists(), f"nothing rendered for {bad}")
+
+
 class TheMillionTokenWindow(unittest.TestCase):
     """Discussion #63 (2026-11-09): FLASH_LOCAL_CONTEXT=1m serves 1,048,576 tokens by YaRN, as measured on the reference
     box (8 passphrases of 8 retrieved up to 1,036,576 tokens). The overrides come from the pinned checkpoint's own RoPE,

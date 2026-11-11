@@ -355,6 +355,21 @@ case "${FLASH_LOCAL_DRAFT_TOKENS:-}" in
   *) die "FLASH_LOCAL_DRAFT_TOKENS takes a whole number from 1 to 7, got: $FLASH_LOCAL_DRAFT_TOKENS" ;;
 esac
 
+# The share of the GPU's memory the engine takes (--gpu-memory-utilization): FLASH_LOCAL_MEMORY_SHARE when this
+# run's shell gives one, else the one the installed unit names (a share the box chose, read back like the
+# target), else the card's 0.8. What the share adds past the weights is KV cache, about 53K tokens of the
+# 262K window per GiB, 0.01 of share being 1.2 GiB (this box, 2026-11-10: 0.8 left 17.7 GiB for 941,957
+# tokens and 13 GB to the box). The GPU's memory is the machine's: the box keeps what the engine does not
+# take, and its page cache holds the PLE table the engine reads at every token, so 0.92 is the ceiling
+# and 0.5 the floor, both refused by name before anything is fetched or rendered.
+INSTALLED_SHARE="$( { grep -o -- '--gpu-memory-utilization [0-9.]*' "${INSTALLED:-/nonexistent}" 2>/dev/null || true; } | head -1 | awk '{print $2}' )"
+case "${FLASH_LOCAL_MEMORY_SHARE:-}" in
+  "") GMU="${INSTALLED_SHARE:-$GMU}" ;;
+  *) awk -v x="$FLASH_LOCAL_MEMORY_SHARE" 'BEGIN { exit !(x ~ /^0\.[0-9][0-9]?$/ && x + 0 >= 0.5 && x + 0 <= 0.92) }' \
+       || die "FLASH_LOCAL_MEMORY_SHARE takes a share of the GPU's memory from 0.5 to 0.92 with one or two decimals (the card's is 0.8), got: $FLASH_LOCAL_MEMORY_SHARE"
+     GMU="$FLASH_LOCAL_MEMORY_SHARE" ;;
+esac
+
 # What the unit serves with, as this run resolves it: under mtp, the lane's own image, its own
 # caches and the card's output head, byte for byte as the release before this change served them;
 # under dflash2, the drafter's half. The compiled drafter, the AOT artifact and the kernel choices
