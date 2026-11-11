@@ -184,5 +184,14 @@ def build(cfg, experts: int, top_k: int) -> Counter:
     device = torch.device("cuda", torch.cuda.current_device()) if cuda else torch.device("cpu")
     counts = torch.zeros((capacity, experts), dtype=torch.int32, device=device)
     ones = torch.ones(tokens * top_k * 2, dtype=torch.int32, device=device)
-    host = torch.zeros((capacity, experts), dtype=torch.int32, pin_memory=cuda)
+    # the host copy, on the CPU by name: the first MoE layer is built inside vLLM's device context,
+    # where a tensor with no device lands on the GPU and cannot be pinned (boot of 2026-11-10,
+    # "Only dense CPU tensors can be pinned", 48 layers not counted); unpinned when pinning fails,
+    # the copy out then waits on the device instead of running beside it
+    host = torch.zeros((capacity, experts), dtype=torch.int32, device="cpu")
+    if cuda:
+        try:
+            host = host.pin_memory()
+        except RuntimeError as e:
+            logger.warning("flash_local_experts: the host copy is not pinned, copies out will wait: %s", e)
     return Counter(counts, ones, host, experts, top_k, model_meta(cfg))
