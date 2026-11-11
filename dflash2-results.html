@@ -176,9 +176,9 @@
     <rect x="930" y="100" width="90" height="60" rx="6" fill="var(--tint)" stroke="currentColor" stroke-width="1.5"/>
     <text class="lbl" x="975.0" y="118" text-anchor="middle" fill="currentColor" font-weight="600">token t+1</text>
     <text class="lbl-s" x="975.0" y="134" text-anchor="middle">draft</text>
-    <path d="M975 160 L975 250 L95 250 L95 100" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrA)"/>
+    <path d="M975 160 L975 250 L6 250 L6 74 L18 74" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrA)"/>
+    <path d="M6 171 L18 171" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#arrA)"/>
     <text class="lbl-s" x="535" y="244" text-anchor="middle">feedback, x4: the draft becomes token t, the layer's 4 output streams become the state; pass k cannot start before pass k-1 sampled</text>
-    <path d="M975 160 L975 250" fill="none" stroke="none"/>
     <path d="M700 185 L725 185 L725 250" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3"/>
     <!-- step timeline -->
     <text class="lbl" x="20" y="300" fill="currentColor">one decode step, per request</text>
@@ -219,8 +219,8 @@
     <text class="lbl" x="645.0" y="58" text-anchor="middle" fill="var(--accent)" font-weight="600">drafter KV cache</text>
     <text class="lbl-s" x="645.0" y="74" text-anchor="middle">sliding window 2048</text>
     <text class="lbl-s" x="645.0" y="88" text-anchor="middle">1504-token blocks, Triton</text>
-    <path d="M645 102 L645 155 L440 155" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrBa)"/>
-    <text class="lbl-s" x="660" y="140">K, V of the context</text>
+    <path d="M645 102 L645 146 L530 146 L530 168" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrBa)"/>
+    <text class="lbl-s" x="655" y="134">K, V of the context, into every layer's attention</text>
     <!-- block path -->
     <text class="lbl" x="20" y="160" fill="currentColor">block path, once per step</text>
     <rect x="20" y="210" width="170" height="76" rx="6" fill="none" stroke="var(--accent)" stroke-width="2"/>
