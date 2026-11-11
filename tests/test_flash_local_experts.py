@@ -246,6 +246,43 @@ class TheHook(unittest.TestCase):
         self.assertIsNone(other.router.capture_fn)
         self.assertFalse(hasattr(none.router, "capture_fn"))
 
+    def test_build_puts_the_host_copy_on_the_cpu_whatever_device_the_model_loads_under(self):
+        """vLLM builds the model inside a device context: a tensor made with no device lands on the
+        GPU, and the GPU cannot be pinned (the boot of 2026-11-10 counted nothing for that)."""
+        class T:
+            def __init__(self, shape, device, pinned=False):
+                self.shape, self.device, self.pinned = shape, device, pinned
+
+            def pin_memory(self):
+                if self.device != "cpu":
+                    raise RuntimeError("Only dense CPU tensors can be pinned")
+                return T(self.shape, self.device, True)
+
+        def tensor(shape, dtype=None, device=None, pin_memory=False):
+            dev = "cuda:0" if device is None else str(device)   # the context's default: the GPU
+            if pin_memory and dev != "cpu":
+                raise RuntimeError("Only dense CPU tensors can be pinned")
+            return T(shape if isinstance(shape, tuple) else (shape,), dev, pin_memory)
+
+        fake = types.ModuleType("torch")
+        fake.int32 = "int32"
+        fake.zeros = fake.ones = tensor
+        fake.device = lambda kind, index=None: f"{kind}:{index}" if index is not None else kind
+        fake.cuda = types.SimpleNamespace(is_available=lambda: True, current_device=lambda: 0)
+        cfg = types.SimpleNamespace(model_config=types.SimpleNamespace(hf_text_config=types.SimpleNamespace(num_hidden_layers=2)),
+                                    scheduler_config=types.SimpleNamespace(max_num_batched_tokens=16))
+        saved = sys.modules.get("torch")
+        sys.modules["torch"] = fake
+        try:
+            c = counter.build(cfg, 8, 2)
+        finally:
+            if saved is None:
+                del sys.modules["torch"]
+            else:
+                sys.modules["torch"] = saved
+        self.assertEqual((c.counts.device, c.ones.device, c.host.device, c.host.pinned), ("cuda:0", "cuda:0", "cpu", True))
+        self.assertEqual(c.capacity, 2 + 4)
+
     def test_a_counter_that_cannot_be_built_leaves_the_model_built(self):
         Runner = runner_class()
 
