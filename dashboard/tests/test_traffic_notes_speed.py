@@ -147,6 +147,19 @@ class SpeedRate(unittest.TestCase):
         self.assertEqual(r["live"], ["1,235", "73", "62 %900 tok/s"])
 
 
+class SecondLine(unittest.TestCase):
+    def test_each_chart_gets_a_second_line_from_its_own_series(self):
+        r = run(self, r"""
+        [[100, 50], [400, 80], [200, 20]].forEach(([p, pct]) =>
+          feed({engine_fast: {load: [{num_reqs: 1}], speed: {prefill: p, decode: p / 10, cached: p / 2, cached_pct: pct}}}));
+        report({max: SERIES.tps_pre_max, cur: SERIES.tps_pre, pct: SERIES.tps_cac_pct, decmax: SERIES.tps_dec_max});
+        """)
+        self.assertEqual(r["cur"], [100, 400, 200])
+        self.assertEqual(r["max"], [100, 400, 400])       # the most seen so far, never going down
+        self.assertEqual(r["pct"], [50, 80, 20])
+        self.assertEqual(r["decmax"], [10, 40, 40])
+
+
 class MobileOrder(unittest.TestCase):
     def test_the_list_of_connections_is_last_on_a_narrow_screen_only(self):
         rules = [x for x in css_rules() if "#tr-feed" in x[0]]

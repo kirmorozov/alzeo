@@ -143,6 +143,8 @@ the SGLang names beside them) as a difference over a sliding window of 10 s (`en
 that lands in chunks of 4096 tokens shows its mean and not each chunk. Idle reads 0; with no text engine, or no read of
 its counters, a dash. Counters that went back, or another engine, start the window again.
 
+**Two lines on each chart.** Prefill and decode draw the current speed and, in another color, the highest seen since the page opened (the current one is scaled to it); the cache chart draws its count and its share in plain percent.
+
 **The list of connections last on a narrow screen.** Under 980 px the Traffic view reads: the counters, the speed
 tiles, the last 5 minutes, the abandoned requests, and the list of relayed requests at the end. The wide layout is as it
 was (the order is CSS, not markup).
