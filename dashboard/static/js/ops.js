@@ -20,6 +20,11 @@ on('engine_fast', d => {
   [['pre', 'prefill', 'tps_pre'], ['dec', 'decode', 'tps_dec'], ['cac', 'cached', 'tps_cac']].forEach(([id, k, series]) => {
     setText('tr-' + id, sp ? fmtRate(sp[k]) : '-');
     if (sp) push(series, sp[k]); else SERIES[series] = [];
+    if (id === 'cac' && sp){      // the share first, then the count behind it
+      const v = $('tr-cac'), n = sp.cached_pct == null ? null : Math.round(sp.cached_pct);
+      if (n == null) setText(v, '0');
+      else if (v){ v.textContent = n + ' %'; const s = document.createElement('small'); s.textContent = fmtRate(sp.cached) + ' tok/s'; v.appendChild(s); }
+    }
     drawSpark($('tr-' + id + '-spark'), series, cssVar('--brand'), 0, {empty: sp ? 'quiet so far' : 'no reading'});
   });
 });

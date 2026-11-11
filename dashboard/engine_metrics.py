@@ -416,7 +416,9 @@ class Rate:
         if dt < 0.5:
             return None
         return {"prefill": round((prompt - p0) / dt, 1), "decode": round((generated - g0) / dt, 1),
-                "cached": round((cached - c0) / dt, 1)}
+                "cached": round((cached - c0) / dt, 1),
+                # the share of the window's prompt tokens the cache served, None with no prompt in it
+                "cached_pct": round(100 * min(1.0, (cached - c0) / (prompt - p0)), 1) if prompt > p0 else None}
 
     def clear(self):
         self.key = None

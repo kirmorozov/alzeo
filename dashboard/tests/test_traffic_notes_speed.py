@@ -97,17 +97,17 @@ class SpeedRate(unittest.TestCase):
         r = em.Rate(10.0)
         out = self.feed(r, [(0, 0, 0), (1, 0, 80), (2, 0, 160)])
         self.assertIsNone(out[0])
-        self.assertEqual(out[2], {"prefill": 0.0, "decode": 80.0, "cached": 0.0})
+        self.assertEqual(out[2], {"prefill": 0.0, "decode": 80.0, "cached": 0.0, "cached_pct": None})
 
     def test_cached_prompt_tokens_have_their_own_rate(self):
         r = em.Rate(10.0)
         r.add(0, "u", 0, 0, 0)
-        self.assertEqual(r.add(2, "u", 4000, 0, 3000), {"prefill": 2000.0, "decode": 0.0, "cached": 1500.0})
+        self.assertEqual(r.add(2, "u", 4000, 0, 3000), {"prefill": 2000.0, "decode": 0.0, "cached": 1500.0, "cached_pct": 75.0})
 
     def test_idle_reads_zero(self):
         r = em.Rate(10.0)
         out = self.feed(r, [(t, 500, 900) for t in range(5)])
-        self.assertEqual(out[-1], {"prefill": 0.0, "decode": 0.0, "cached": 0.0})
+        self.assertEqual(out[-1], {"prefill": 0.0, "decode": 0.0, "cached": 0.0, "cached_pct": None})
 
     def test_a_bursty_prefill_is_smoothed_over_the_window_not_chunk_by_chunk(self):
         r = em.Rate(10.0)
@@ -138,13 +138,13 @@ class SpeedRate(unittest.TestCase):
         const idle = [txt('tr-pre'), txt('tr-dec'), txt('tr-cac')];
         feed({engine_fast: {load: null, speed: null}});
         const none = [txt('tr-pre'), txt('tr-dec'), txt('tr-cac')];
-        feed({engine_fast: {load: [{num_reqs: 1}], speed: {prefill: 1234.5, decode: 73.2, cached: 900.4}}});
+        feed({engine_fast: {load: [{num_reqs: 1}], speed: {prefill: 1234.5, decode: 73.2, cached: 900.4, cached_pct: 62.4}}});
         report({idle, none, live: [txt('tr-pre'), txt('tr-dec'), txt('tr-cac')]});
         """ % '{prefill: 0, decode: 0, cached: 0}'
         r = run(self, body)
         self.assertEqual(r["idle"], ["0", "0", "0"])
         self.assertEqual(r["none"], ["-", "-", "-"])
-        self.assertEqual(r["live"], ["1,235", "73", "900"])
+        self.assertEqual(r["live"], ["1,235", "73", "62 %900 tok/s"])
 
 
 class MobileOrder(unittest.TestCase):
