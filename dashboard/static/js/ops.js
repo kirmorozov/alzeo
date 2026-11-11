@@ -2,6 +2,9 @@
 /* Traffic, Machine, Library, Logs and Settings: the views you open to look closer. */
 
 // ── Traffic ───────────────────────────────────────────────────────────────────
+// tokens per second: whole above 10, a decimal below, 0 when idle
+const SPEED_MAX = {};     // the highest speed seen by each tile since the page opened
+const fmtRate = v => v == null ? '-' : v >= 10 ? Math.round(v).toLocaleString('en-US') : v > 0 ? v.toFixed(1) : '0';
 // With no text engine the counters say so: they read '…', a value on its way, for as long as
 // the box served nothing (found by the monkey check, 2026-10-02; the page before the
 // redesign of 2026-09-30 said "no engine")
@@ -12,6 +15,31 @@ on('engine_fast', d => {
   setText('tr-tok', none ? 'none' : fmtN(physTokens(l)));
   if (none){ SERIES.req = []; } else push('req', runningReqs(l));
   drawSpark($('tr-spark'), 'req', cssVar('--brand'), Math.max(4, F.maxRun || 4), {empty: none ? 'no text engine' : 'quiet so far'});
+  // the speeds, smoothed by the server over 10 s (engine_metrics.Rate): a dash with no engine
+  // or no read of its counters, 0 when it is idle
+  const sp = d.speed;
+  [['pre', 'prefill', 'tps_pre'], ['dec', 'decode', 'tps_dec'], ['cac', 'cached', 'tps_cac']].forEach(([id, k, series]) => {
+    setText('tr-' + id, sp ? fmtRate(sp[k]) : '-');
+    if (sp) push(series, sp[k]); else SERIES[series] = [];
+    if (id === 'cac' && sp){      // the share first, then the count behind it
+      const v = $('tr-cac'), n = sp.cached_pct == null ? null : Math.round(sp.cached_pct);
+      if (n == null) setText(v, '0');
+      else if (v){ v.textContent = n + ' %'; const s = document.createElement('small'); s.textContent = fmtRate(sp.cached) + ' tok/s'; v.appendChild(s); }
+    }
+    // a second line on each chart, another color: prefill and decode against the most seen since this page
+    // opened (the current one scales to it), the cache's count against its share in plain percent
+    let lines, yMax = 0;
+    if (id === 'cac'){
+      if (sp) push('tps_cac_pct', sp.cached_pct == null ? 0 : sp.cached_pct); else SERIES.tps_cac_pct = [];
+      lines = [{name: 'tps_cac_pct', color: cssVar('--ok'), yMax: 100}];
+    } else {
+      const mx = SPEED_MAX[series] = Math.max(SPEED_MAX[series] || 0, sp ? sp[k] : 0);
+      if (sp) push(series + '_max', mx); else SERIES[series + '_max'] = [];
+      yMax = mx || 1;
+      lines = [{name: series + '_max', color: cssVar('--warn'), yMax}];
+    }
+    drawSpark($('tr-' + id + '-spark'), series, cssVar('--brand'), yMax, {empty: sp ? 'quiet so far' : 'no reading', lines});
+  });
 });
 // said after the whole payload: which lane serves is the lifecycle's, read after this one
 afterApply(() => {

@@ -384,3 +384,42 @@ class Window:
             "approximate": any(t0 < tc <= t1 for tc in self.unseparated),
         }
         return out
+
+
+class Rate:
+    """Tokens per second over a sliding window, read off the engine's two token counters at
+    the 1 s tier. A rate is the counters' difference over the time between the window's ends,
+    so a prompt that lands in chunks of 4096 tokens (a 100K prompt) shows its mean over the
+    window and not each chunk's spike, and a pause between two chunks does not read as idle.
+    Counters that went back (the engine started again) or another engine start it again."""
+
+    def __init__(self, span: float = 10.0):
+        self.span = span
+        self.key = None
+        self.samples: deque = deque()     # (t, prompt, generated, cached)
+
+    def add(self, t: float, key, prompt: float, generated: float,
+            cached: float = 0.0) -> dict | None:
+        """One read at `t` of the engine `key`: {"prefill", "decode", "cached"} in tokens per
+        second, or None until the window holds two reads."""
+        if key != self.key or (self.samples and (prompt < self.samples[-1][1]
+                                                 or generated < self.samples[-1][2]
+                                                 or cached < self.samples[-1][3])):
+            self.key = key
+            self.samples.clear()
+        self.samples.append((t, prompt, generated, cached))
+        # one read at or before the window's start is kept: the difference starts there
+        while len(self.samples) > 2 and self.samples[1][0] <= t - self.span:
+            self.samples.popleft()
+        t0, p0, g0, c0 = self.samples[0]
+        dt = t - t0
+        if dt < 0.5:
+            return None
+        return {"prefill": round((prompt - p0) / dt, 1), "decode": round((generated - g0) / dt, 1),
+                "cached": round((cached - c0) / dt, 1),
+                # the share of the window's prompt tokens the cache served, None with no prompt in it
+                "cached_pct": round(100 * min(1.0, (cached - c0) / (prompt - p0)), 1) if prompt > p0 else None}
+
+    def clear(self):
+        self.key = None
+        self.samples.clear()

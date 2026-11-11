@@ -1038,9 +1038,28 @@ def collect_engine_fast():
     lc.prompt_read(PROMPT_STATE, now, (load or [None])[0])
     return {"node_id": "local", "load": load, "healthy": healthy,
             "prompt": lc.prompt_progress(PROMPT_STATE, now),
+            "speed": engine_speed(load, now),
             "mem_floor": {"gib": MEM_FLOOR_GIB, "avail_gib": avail, "aborts": MEM_FLOOR["aborts"],
                           "last_abort": MEM_FLOOR["last_abort"], "via": MEM_FLOOR["last_via"],
                           "said": MEM_FLOOR["last_said"]}}
+
+
+# Tokens per second the Traffic view's speed tiles show (engine_metrics.Rate): read at the 1 s tier,
+# smoothed over a 10 s window, None while no text engine serves
+SPEED = em.Rate(10.0)
+SPEED_LOCK = threading.Lock()
+
+
+def engine_speed(load, now: float):
+    """{"prefill", "decode", "cached"} tokens per second of the serving text engine, or None when
+    none serves or its counters could not be read."""
+    key = serving_text_key(lc.TEXT_UNITS + VLLM_UNITS) if load is not None else None
+    read = engine_metrics_read(timeout=2.0) if key else None
+    with SPEED_LOCK:
+        if read is None:
+            SPEED.clear()
+            return None
+        return SPEED.add(now, key, read[0]["prompt"], read[0]["generated"], read[0]["cached"])
 
 
 KERNEL_LAST = {"count": None}

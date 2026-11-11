@@ -1057,13 +1057,30 @@ function wedgeNext(){
   if (c.autoheal) return 'The autoheal belt restarts it' + (c.autoheal_grace_s ? ` after its ${fmtDur(c.autoheal_grace_s)} grace period` : '');
   return 'Nothing restarts it by itself (the autoheal belt is off; COCKPIT_AUTOHEAL=1 arms it): stop it and start it again from Lanes';
 }
+// Hide on a note (2026-11-10): the hash of its words (title and sentence) is kept in this browser's
+// localStorage, and a note whose words changed (a new commit, a new version) has another hash, so it shows
+// again. Only the notes that inform (info, orange) can be hidden: an error, a warning, or the installer
+// running (pin) is about now. Every read and write of the storage is guarded, and the page works with it blocked.
+const HIDDEN_KEY = 'cockpit.hidden-notes', HIDEABLE = new Set(['info', 'orange']), HIDDEN_MAX = 100;
+// durations a note counts down ("answers again in 2 min") are no part of what it says
+const msgHash = (strong, text) => {
+  const s = strong + '\n' + String(text).replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|min|m|h)\b/g, '#');
+  let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+};
+const hiddenGet = () => { try { const a = JSON.parse(localStorage.getItem(HIDDEN_KEY)); return Array.isArray(a) ? a.filter(x => typeof x === 'string') : []; } catch { return []; } };
+const hiddenSet = a => { try { if (a.length) localStorage.setItem(HIDDEN_KEY, JSON.stringify(a.slice(-HIDDEN_MAX))); else localStorage.removeItem(HIDDEN_KEY); } catch { /* storage may be unavailable: hidden for this page view only */ } };
+let hiddenMem = null;       // the same list kept in memory too, for a browser that refuses the storage
+const hiddenList = () => hiddenMem || (hiddenMem = hiddenGet());
+function hideNote(h){ hiddenMem = hiddenList().filter(x => x !== h).concat(h).slice(-HIDDEN_MAX); hiddenSet(hiddenMem); if (lastState) renderBanners(lastState, lastErrors); }
+function showHiddenNotes(){ hiddenMem = []; hiddenSet([]); if (lastState) renderBanners(lastState, lastErrors); }
 function renderBanners(state, errors){
   const box = $('banners'); if (!box) return;
-  const want = [];
+  let want = [];
   // cmd: a command the banner asks to run, shown apart with a Copy button (Hasan, 2026-10-21:
   // selecting it by hand out of a sentence was the only way)
   // list: lines a banner shows one under the other, between its title and its sentence (the commits of the clone)
-  const add = (kind, strong, text, cmd, list) => want.push([kind, strong, text, cmd, list]);
+  const add = (kind, strong, text, cmd, list, pin) => want.push([kind, strong, text, cmd, list, !pin && HIDEABLE.has(kind) ? msgHash(strong, text) : null]);
   const otherUp = n => Object.entries(engines()).some(([m, x]) => m !== n && (!UNIT_DOWN.has(x.state) || x.restarting));
   if (offline) add('err', 'Connection lost.', `No data from the cockpit for ${fmtDur((Date.now() - lastMsgAt) / 1000)}: what is on screen is frozen and actions wait.`);
   if (F.config && F.config.dry_run) add('info', 'Dry run.', 'Every action is confirmed, logged and audited as usual, but nothing is executed. This instance exists for tests.');
@@ -1138,7 +1155,7 @@ function renderBanners(state, errors){
   // that asks to restart this cockpit, which the update restarts
   const run = upd.install_running;
   if (run) add('info', run.to ? `Installing ${run.to}.` : 'The installer is running.',
-    `It started ${fmtMin(Math.max(0, Date.now() / 1000 - run.started))} ago. There is nothing to run meanwhile: this page says what is left to do once it ends.`);
+    `It started ${fmtMin(Math.max(0, Date.now() / 1000 - run.started))} ago. There is nothing to run meanwhile: this page says what is left to do once it ends.`, null, null, true);
   if (upd.behind && !run) add('info', `Version ${upd.latest} is out; this box runs ${upd.installed}.`, 'The update keeps your choices, and moves a default an older release left to today\'s: it lists both before its first step. Update with:', updateCmd(F.config));
   // The services behind their own clone (v1.36.0): installed.json names the release and the
   // commit the last run that ended well installed. A git pull with no ./install.sh moves the
@@ -1189,16 +1206,18 @@ function renderBanners(state, errors){
     `The container ${o.container} serves, but its unit is not running, so no other engine may start and a reboot will not bring it back. Start it from Lanes to replace it, or remove it:`, `docker rm -f ${o.container}`));
   if (errors.lifecycle) add('warn', 'Engine state unknown.', 'The lifecycle collector failed: ' + String(errors.lifecycle).slice(0, 120));
   // drawn only when it changed: a live region re-read twice a second is noise
-  const sig = JSON.stringify(want.map(w => [w[0], w[1], !!w[3], w[4] || null]));
+  const hid = new Set(hiddenList()), hiddenN = want.filter(w => w[5] && hid.has(w[5])).length;
+  want = want.filter(w => !(w[5] && hid.has(w[5])));
+  const sig = JSON.stringify([hiddenN, want.map(w => [w[0], w[1], !!w[3], w[4] || null])]);
   if (box.dataset.sig === sig){
-    [...box.children].forEach((b, i) => {
+    [...box.children].slice(0, want.length).forEach((b, i) => {
       const t = b.querySelector('.t'); if (t) setText(t, want[i][2]);
       const c = b.querySelector('.bcmd .cmd'); if (c) setText(c, want[i][3]);
     });
     return;
   }
   box.dataset.sig = sig; clear(box);
-  want.forEach(([kind, strong, text, cmd, list]) => {
+  want.forEach(([kind, strong, text, cmd, list, hash]) => {
     const b = el('div', 'banner ' + kind);
     b.append(el('span', 'lamp ' + (kind === 'err' ? 'err' : kind === 'warn' ? 'warn' : kind === 'orange' ? 'orange' : '')));
     const p = el('div'); p.append(el('b', null, strong + ' '));
@@ -1209,8 +1228,18 @@ function renderBanners(state, errors){
       btn.type = 'button'; btn.addEventListener('click', () => copyText(pre.textContent));
       row.append(btn); c.append(pre, row); p.append(c);
     }
-    b.append(p); box.append(b);
+    b.append(p);
+    if (hash){
+      const x = el('button', 'btn sm ghost nhide', 'Hide'); x.type = 'button'; x.title = 'Hide this note until its words change';
+      x.addEventListener('click', () => hideNote(hash)); b.append(x);
+    }
+    box.append(b);
   });
+  if (hiddenN){
+    const row = el('div', 'banner-hidden'), btn = el('button', 'btn sm ghost nshow', 'Show again');
+    btn.type = 'button'; btn.addEventListener('click', showHiddenNotes);
+    row.append(el('span', 'hn', `${hiddenN} hidden`), btn); box.append(row);
+  }
 }
 afterApply(renderBanners);
 
@@ -1237,6 +1266,13 @@ function drawSpark(canvas, name, color, yMax, opts = {}){
   c.strokeStyle = color; c.lineWidth = 2; c.lineJoin = 'round'; c.stroke();
   const [lx, ly] = at(data[data.length - 1], data.length - 1);
   c.fillStyle = color; c.beginPath(); c.arc(lx - 2, ly, 3, 0, 6.284); c.fill();
+  // more lines on the same chart (opts.lines: {name, color, yMax}), each on its own scale, a line and no fill
+  (opts.lines || []).forEach(l => {
+    const d2 = SERIES[l.name] || []; if (d2.length < 2) return;
+    const m2 = l.yMax || Math.max(...d2, 1e-9);
+    c.beginPath(); d2.forEach((v, i) => { const x = i * (w / (d2.length - 1)), y = h - Math.min(v / m2, 1) * (h - 8) - 4; i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.strokeStyle = l.color; c.lineWidth = 1.5; c.lineJoin = 'round'; c.stroke();
+  });
 }
 
 // ── collectors every view shares ───────────────────────────────────────────────
