@@ -76,8 +76,13 @@ def pre_dflash2_render(home, hf):
     for ph, val in values.items():
         text = text.replace(ph, val)
     # the routing counter the cockpit's Experts view reads (flash-local-experts/) came to both
-    # targets after the fixture: its two lines, the path entry and the mount, and nothing else
+    # targets after the fixture: its two lines, the path entry and the mount, the note of its kill
+    # switch (QWEN38_EXPERTS=0, rendered into the line only when asked), and nothing else
     text = text.replace("-e PYTHONPATH=/opt/qwen38-auth -e", "-e PYTHONPATH=/opt/qwen38-auth:/opt/experts-plugin -e")
+    text = text.replace("# VLLM_NO_USAGE_STATS and DO_NOT_TRACK:",
+                        "# QWEN38_EXPERTS=0, when the line carries it: the routing counter (flash-local-experts/, on the PYTHONPATH\n"
+                        "# below) loads and does nothing; install-flash-local.sh renders it from the same variable at a switch.\n"
+                        "# VLLM_NO_USAGE_STATS and DO_NOT_TRACK:")
     text = text.replace(f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n",
                         f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n"
                         f"  --mount type=bind,source={home}/.config/qwen38/flash-local-experts,target=/opt/experts-plugin,readonly \\\n")
