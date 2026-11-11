@@ -7,14 +7,23 @@ there at each MoERunner's construction (plugin.py), one row per runner in constr
 the 48 decoder layers, then the MTP head's own layer when the unit drafts with it. The rows'
 layer names go into the file's meta, so the reader tells the two apart by name.
 
-The hot path, per MoE layer per step: one index_add_ of a slice of a preallocated ones vector
-into the row of a preallocated int32 matrix, no allocation, no host sync; the row 0 call also
-queues an asynchronous device-to-host copy of the whole matrix into pinned memory. Both are
-CUDA kernels, so a CUDA graph captured over a step records and replays them. The MoE runs
-inside the torch.ops.vllm.moe_forward custom op, which torch.compile treats as opaque: the
-slot runs as eager Python inside it, and the compiled graph and its cached AOT artifact are
-unchanged. A batch wider than the ones vector (none is: it is twice the scheduler's ceiling)
-is left uncounted rather than grown on the hot path.
+The hot path, per MoE layer per step: the step's ids copied into a preallocated scratch slice
+and clamped there, then one index_add_ of a slice of a preallocated ones vector into the row
+of a preallocated int32 matrix, no allocation, no host sync; the row 0 call also queues an
+asynchronous device-to-host copy of the whole matrix into pinned memory. All are CUDA
+kernels, so a CUDA graph captured over a step records and replays them. The MoE runs inside
+the torch.ops.vllm.moe_forward custom op, which torch.compile treats as opaque: the slot runs
+as eager Python inside it, and the compiled graph and its cached AOT artifact are unchanged. A
+batch wider than the ones vector (none is: it has room for the scheduler's ceiling at top_k plus
+the spare columns) is left uncounted rather than grown on the hot path.
+
+The matrix is wider than the experts. The image's router fuses the shared expert into the
+routed top-k (FusedTopKBiasRouter: an id of num_experts, then num_experts + 1 and so on, after
+each token's routed ids), and the capture sees those ids; a matrix exactly as wide as the
+experts asserted on the GPU and took the engine down with it (boot of 2026-11-10,
+"indexFuncLargeIndex: Assertion dstIndex < dstAddDimSize"). SPARE_COLUMNS columns past the
+experts take them, every id is clamped into the matrix first, and the file carries the experts'
+columns alone: the shared expert is every token's, and says nothing of the routing.
 
 Padding counts too: a step padded to its CUDA graph's size routes its padding rows like any
 token, so a few tokens per step land where the padding's stale inputs send them. The
@@ -38,6 +47,7 @@ logger = logging.getLogger("flash_local_experts")
 
 DEFAULT_PATH = "/dev/shm/qwen38-experts.bin"
 PERIOD_S = 0.5
+SPARE_COLUMNS = 8   # the columns past the experts: fused shared experts, and whatever else is clamped there
 
 
 def file_path() -> str:
@@ -45,14 +55,17 @@ def file_path() -> str:
 
 
 class Counter:
-    """The matrix and its writer. counts and host are [capacity, experts] int32 tensors on the
-    device and in pinned host memory; ones is a device int32 vector of ones, at least as long
-    as any step's tokens x top_k. Built by build() in the engine, by a test with its fakes."""
+    """The matrix and its writer. counts and host are [capacity, experts + spare] int32 tensors on
+    the device and in pinned host memory; ones is a device int32 vector of ones and scratch a
+    device int32 vector of the same length, at least as long as any step's tokens x ids per
+    token. Built by build() in the engine, by a test with its fakes."""
 
-    def __init__(self, counts, ones, host, experts: int, top_k: int, meta: dict, path: str = ""):
-        self.counts, self.ones, self.host = counts, ones, host
+    def __init__(self, counts, ones, scratch, host, experts: int, top_k: int, meta: dict, path: str = ""):
+        self.counts, self.ones, self.scratch, self.host = counts, ones, scratch, host
         self.experts, self.top_k = experts, top_k
-        self.capacity = int(counts.shape[0])
+        self.capacity, self.width = int(counts.shape[0]), int(counts.shape[1])
+        if self.width <= experts:
+            raise ValueError(f"the matrix is {self.width} wide for {experts} experts: no column for a fused shared expert")
         self.meta = dict(meta)
         self.names: list[str] = []
         self.path = path or file_path()
@@ -75,15 +88,17 @@ class Counter:
     def capture_fn(self, row: int, previous: Callable | None = None) -> Callable:
         """The slot's function for one row. The first row's call also queues the copy out."""
         counts_row = self.counts[row]
-        counts, ones, host = self.counts, self.ones, self.host
-        width = ones.numel()
+        counts, ones, scratch, host = self.counts, self.ones, self.scratch, self.host
+        room, last = ones.numel(), self.width - 1
         first = row == 0
 
         def capture(topk_ids):
             ids = topk_ids.reshape(-1)
             n = ids.numel()
-            if n <= width:
-                counts_row.index_add_(0, ids, ones[:n])
+            if n <= room:
+                # into the scratch slice (int64 ids become int32 there), clamped into the matrix:
+                # an id past the experts lands in the spare columns, never in an assert
+                counts_row.index_add_(0, scratch[:n].copy_(ids).clamp_(0, last), ones[:n])
             if first:
                 host.copy_(counts, non_blocking=True)
             if previous is not None:
@@ -117,7 +132,7 @@ class Counter:
         rows = len(names)
         self.seq += 1
         meta = dict(self.meta, rows=names)
-        counts = self.host[:rows].numpy().tobytes() if rows else b""
+        counts = self.host[:rows, :self.experts].numpy().tobytes() if rows else b""
         return wire.pack(meta, counts, rows, self.experts, self.top_k, self.seq, time.time(), self.pid)
 
     def write_once(self) -> None:
@@ -182,16 +197,18 @@ def build(cfg, experts: int, top_k: int) -> Counter:
     tokens = int(getattr(cfg.scheduler_config, "max_num_batched_tokens", 0) or 0) or 8192
     cuda = torch.cuda.is_available()
     device = torch.device("cuda", torch.cuda.current_device()) if cuda else torch.device("cpu")
-    counts = torch.zeros((capacity, experts), dtype=torch.int32, device=device)
-    ones = torch.ones(tokens * top_k * 2, dtype=torch.int32, device=device)
+    width, room = experts + SPARE_COLUMNS, tokens * (top_k + SPARE_COLUMNS)
+    counts = torch.zeros((capacity, width), dtype=torch.int32, device=device)
+    ones = torch.ones(room, dtype=torch.int32, device=device)
+    scratch = torch.zeros(room, dtype=torch.int32, device=device)
     # the host copy, on the CPU by name: the first MoE layer is built inside vLLM's device context,
     # where a tensor with no device lands on the GPU and cannot be pinned (boot of 2026-11-10,
     # "Only dense CPU tensors can be pinned", 48 layers not counted); unpinned when pinning fails,
     # the copy out then waits on the device instead of running beside it
-    host = torch.zeros((capacity, experts), dtype=torch.int32, device="cpu")
+    host = torch.zeros((capacity, width), dtype=torch.int32, device="cpu")
     if cuda:
         try:
             host = host.pin_memory()
         except RuntimeError as e:
             logger.warning("flash_local_experts: the host copy is not pinned, copies out will wait: %s", e)
-    return Counter(counts, ones, host, experts, top_k, model_meta(cfg))
+    return Counter(counts, ones, scratch, host, experts, top_k, model_meta(cfg))

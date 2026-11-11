@@ -57,7 +57,19 @@ class Vec:
     def index_add_(self, dim, ids, src):
         assert dim == 0 and src.n == ids.n, "index_add_ takes one value per id"
         for k in range(ids.n):
-            self.data[self.off + ids.data[ids.off + k]] += src.data[src.off + k]
+            i = ids.data[ids.off + k]
+            assert 0 <= i < self.n, f"index_add_: index {i} out of a row of {self.n} (the GPU asserts and the engine dies)"
+            self.data[self.off + i] += src.data[src.off + k]
+        return self
+
+    def copy_(self, other):
+        assert other.n == self.n
+        self.data[self.off:self.off + self.n] = array("i", other.tolist())
+        return self
+
+    def clamp_(self, lo, hi):
+        for k in range(self.n):
+            self.data[self.off + k] = min(hi, max(lo, self.data[self.off + k]))
         return self
 
     def tolist(self):
@@ -65,21 +77,30 @@ class Vec:
 
 
 class Mat:
-    def __init__(self, rows, cols, data=None, off=0):
+    """A row-major int32 matrix and its views: rows, or rows and columns, as torch slices them."""
+
+    def __init__(self, rows, cols, data=None, off=0, stride=None):
         self.shape = (rows, cols)
         self.data = data if data is not None else array("i", [0] * (rows * cols))
-        self.off = off
+        self.off, self.stride = off, cols if stride is None else stride
 
     def __getitem__(self, i):
         rows, cols = self.shape
-        if isinstance(i, slice):
-            start, stop, _ = i.indices(rows)
-            return Mat(stop - start, cols, self.data, self.off + start * cols)
-        return Vec(self.data, self.off + i * cols, cols)
+        rs, cs = i if isinstance(i, tuple) else (i, slice(None))
+        if isinstance(rs, slice):
+            r0, r1, _ = rs.indices(rows)
+            c0, c1, _ = cs.indices(cols)
+            return Mat(r1 - r0, c1 - c0, self.data, self.off + r0 * self.stride + c0, self.stride)
+        c0, c1, _ = cs.indices(cols)
+        return Vec(self.data, self.off + rs * self.stride + c0, c1 - c0)
+
+    def rows(self):
+        return [self[r].tolist() for r in range(self.shape[0])]
 
     def copy_(self, other, non_blocking=False):
-        n = self.shape[0] * self.shape[1]
-        self.data[self.off:self.off + n] = other.data[other.off:other.off + n]
+        assert other.shape == self.shape
+        for r, row in enumerate(other.rows()):
+            self[r].copy_(Vec(array("i", row)))
         self.copied = True
         return self
 
@@ -87,17 +108,20 @@ class Mat:
         return self
 
     def tobytes(self):
-        n = self.shape[0] * self.shape[1]
-        return array("i", self.data[self.off:self.off + n]).tobytes()
+        return array("i", [x for row in self.rows() for x in row]).tobytes()
 
 
 def ids(*rows):
     return Vec(array("i", [e for r in rows for e in r]))
 
 
-def make(experts=8, top_k=2, capacity=3, tokens=4):
-    c = counter.Counter(Mat(capacity, experts), Vec(array("i", [1] * (tokens * top_k * 2))),
-                        Mat(capacity, experts), experts, top_k, {"model": "fake", "num_hidden_layers": 2})
+SPARE = 2   # the test matrix's columns past the experts (the engine's: counter.SPARE_COLUMNS)
+
+
+def make(experts=8, top_k=2, capacity=3, tokens=4, spare=SPARE):
+    room = tokens * (top_k + spare)
+    c = counter.Counter(Mat(capacity, experts + spare), Vec(array("i", [1] * room)), Vec(array("i", [0] * room)),
+                        Mat(capacity, experts + spare), experts, top_k, {"model": "fake", "num_hidden_layers": 2})
     c.path = os.path.join(tempfile.mkdtemp(prefix="experts-"), "qwen38-experts.bin")
     return c
 
@@ -111,15 +135,29 @@ class TheCount(unittest.TestCase):
         f0(ids([1, 5], [5, 7]))          # two tokens, top 2 each
         f1(ids([0, 0]))                  # one token twice to expert 0
         f0(ids([1, 2]))
-        self.assertEqual(c.counts[0].tolist(), [0, 2, 1, 0, 0, 2, 0, 1])
-        self.assertEqual(c.counts[1].tolist(), [2, 0, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(c.counts[0].tolist(), [0, 2, 1, 0, 0, 2, 0, 1] + [0] * SPARE)
+        self.assertEqual(c.counts[1].tolist(), [2, 0, 0, 0, 0, 0, 0, 0] + [0] * SPARE)
+
+    def test_an_id_past_the_experts_lands_in_the_spare_columns_not_in_an_assert(self):
+        """The image's router appends the fused shared expert's id, num_experts, to each token's
+        ids (the boot of 2026-11-10 died on it); any id is clamped into the matrix."""
+        c = make()
+        f = c.capture_fn(c.add_row("model.layers.0.mlp.experts"))
+        f(ids([1, 8], [3, 8]))           # two tokens, one routed expert each plus the shared expert, id 8 of 8
+        f(ids([5, 40], [-3, 9]))         # far past the matrix, and negative: clamped to its last and first column
+        self.assertEqual(c.counts[0].tolist(), [1, 1, 0, 1, 0, 1, 0, 0] + [2, 2], "column 8: the shared expert twice; column 9: id 9 and the clamped 40")
+        f(ids([0, 0]))
+        d = wire.unpack(c.frame())
+        self.assertEqual((d["experts"], list(d["counts"].cast("i"))), (8, [3, 1, 0, 1, 0, 1, 0, 0]), "the file carries the experts' columns alone")
+        with self.assertRaises(ValueError):
+            counter.Counter(Mat(3, 8), Vec(array("i", [1] * 8)), Vec(array("i", [0] * 8)), Mat(3, 8), 8, 2, {})
 
     def test_a_batch_wider_than_planned_is_left_uncounted_not_grown(self):
-        c = make(tokens=1)   # the ones vector holds 1 x 2 x 2 = 4 ids
+        c = make(tokens=1)   # the ones vector holds 1 x (2 + 2) = 4 ids
         f = c.capture_fn(c.add_row("model.layers.0.mlp.experts"))
         f(ids([1, 2], [3, 4]))
         f(ids([1, 2], [3, 4], [5, 6]))   # 6 ids, wider: skipped, no allocation on the hot path
-        self.assertEqual(c.counts[0].tolist(), [0, 1, 1, 1, 1, 0, 0, 0])
+        self.assertEqual(c.counts[0].tolist(), [0, 1, 1, 1, 1, 0, 0, 0] + [0] * SPARE)
 
     def test_the_first_rows_call_copies_the_whole_matrix_out_after_its_own_count(self):
         c = make()
@@ -129,8 +167,8 @@ class TheCount(unittest.TestCase):
         self.assertFalse(getattr(c.host, "copied", False), "only row 0 queues the copy")
         f0(ids([1, 1]))
         self.assertTrue(c.host.copied)
-        self.assertEqual(c.host[1].tolist(), [0, 0, 0, 2, 0, 0, 0, 0])
-        self.assertEqual(c.host[0].tolist(), [0, 2, 0, 0, 0, 0, 0, 0], "the copy carries row 0's own count of this call")
+        self.assertEqual(c.host[1].tolist(), [0, 0, 0, 2, 0, 0, 0, 0] + [0] * SPARE)
+        self.assertEqual(c.host[0].tolist(), [0, 2, 0, 0, 0, 0, 0, 0] + [0] * SPARE, "the copy carries row 0's own count of this call")
 
     def test_a_slot_already_taken_is_called_after_the_count(self):
         c, seen = make(), []
@@ -232,7 +270,7 @@ class TheHook(unittest.TestCase):
         self.assertEqual((len(made), c.names), (1, ["model.layers.0.mlp.experts", "model.layers.1.mlp.experts"]))
         self.assertTrue(callable(a.router.capture_fn) and callable(b.router.capture_fn))
         b.router.capture_fn(ids([4, 4]))
-        self.assertEqual(c.counts[1].tolist(), [0, 0, 0, 0, 2, 0, 0, 0])
+        self.assertEqual(c.counts[1].tolist(), [0, 0, 0, 0, 2, 0, 0, 0] + [0] * SPARE)
         self.assertIsNotNone(c._thread, "the writer starts with the first runner")
 
     def test_a_router_without_the_slot_or_of_another_width_is_left_alone(self):
@@ -280,8 +318,8 @@ class TheHook(unittest.TestCase):
                 del sys.modules["torch"]
             else:
                 sys.modules["torch"] = saved
-        self.assertEqual((c.counts.device, c.ones.device, c.host.device, c.host.pinned), ("cuda:0", "cuda:0", "cpu", True))
-        self.assertEqual(c.capacity, 2 + 4)
+        self.assertEqual((c.counts.device, c.ones.device, c.scratch.device, c.host.device, c.host.pinned), ("cuda:0", "cuda:0", "cuda:0", "cpu", True))
+        self.assertEqual((c.capacity, c.width, c.counts.shape, c.host.shape, c.ones.shape), (2 + 4, 8 + 8, (6, 16), (6, 16), (16 * (2 + 8),)))
 
     def test_a_counter_that_cannot_be_built_leaves_the_model_built(self):
         Runner = runner_class()
