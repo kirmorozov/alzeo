@@ -362,8 +362,10 @@ esac
 # target), else the card's 0.8. What the share adds past the weights is KV cache, about 53K tokens of the
 # 262K window per GiB, 0.01 of share being 1.2 GiB (this box, 2026-11-10: 0.8 left 17.7 GiB for 941,957
 # tokens and 13 GB to the box). The GPU's memory is the machine's: the box keeps what the engine does not
-# take, and its page cache holds the PLE table the engine reads at every token, so 0.92 is the ceiling
-# and 0.5 the floor, both refused by name before anything is fetched or rendered.
+# take, its own processes and the engine's host side, 8 GB in service (the PLE table is read from the
+# disk over io_uring, not through the page cache: 0.03 GiB of the checkpoint resident while serving,
+# 2026-11-11), so 0.92 is the ceiling and 0.5 the floor, both refused by name before anything is
+# fetched or rendered.
 INSTALLED_SHARE="$( { grep -o -- '--gpu-memory-utilization [0-9.]*' "${INSTALLED:-/nonexistent}" 2>/dev/null || true; } | head -1 | awk '{print $2}' )"
 case "${FLASH_LOCAL_MEMORY_SHARE:-}" in
   "") GMU="${INSTALLED_SHARE:-$GMU}" ;;
@@ -371,6 +373,13 @@ case "${FLASH_LOCAL_MEMORY_SHARE:-}" in
        || die "FLASH_LOCAL_MEMORY_SHARE takes a share of the GPU's memory from 0.5 to 0.92 with one or two decimals (the card's is 0.8), got: $FLASH_LOCAL_MEMORY_SHARE"
      GMU="$FLASH_LOCAL_MEMORY_SHARE" ;;
 esac
+# PyTorch's allocator collects its cached blocks past garbage_collection_threshold of its ceiling (the
+# unit says why it is set): the line has to stay above what the engine holds in service, which grows
+# with the share, so it follows the share, 0.04 of the GPU under it, over the ceiling of 0.95 (0.8 at
+# the card's 0.8, as the card's unit had it). Left at 0.8 with the share at 0.85 or 0.87, the engine
+# held more than the line, the allocator collected inside a CUDA graph capture, which CUDA refuses,
+# and the boot died after its memory check had passed (reference box, 2026-11-11, both shares).
+GC_THRESHOLD="$(awk -v s="$GMU" 'BEGIN { printf "%.2f", (s - 0.04) / 0.95 }' | sed -e 's/0$//')"
 
 # What the unit serves with, as this run resolves it: under mtp, the lane's own image, its own
 # caches and the card's output head, byte for byte as the release before this change served them;
@@ -510,7 +519,7 @@ render_unit(){
   sed -e "s|__CHECKPOINT_INDEX__|$index|g" -e "s|__TABLE_SOURCES__|${sources% }$DRAFT_FILES|g" \
       -e "s|__USER__|$(id -un)|g" -e "s|__GROUP__|$(id -gn "$(id -un)")|g" -e "s|__HOME__|$HOME|g" \
       -e "s|__IMAGE__|$LOCAL_IMAGE|g" -e "s|__MODEL__|$MODEL|g" -e "s|__REV__|$MODEL_REV|g" \
-      -e "s|__GMU__|$GMU|g" -e "s|__SEQS__|$SEQS|g" -e "s|__HF_CACHE__|$HF_CACHE|g" \
+      -e "s|__GMU__|$GMU|g" -e "s|__GC_THRESHOLD__|$GC_THRESHOLD|g" -e "s|__SEQS__|$SEQS|g" -e "s|__HF_CACHE__|$HF_CACHE|g" \
       -e "s|__MAXLEN__|$maxlen|g" -e "s|__YARN__|$yarn|g" \
       -e "s|__ENGINE_BIND__|$ENGINE_BIND|g" -e "s|__PORT__|$PORT|g" \
       -e "s|__TABLE_MOUNTS__|$TABLE_MOUNTS|g" -e "s|__SPEC_CONFIG__|$SPEC_CONFIG|g" \

@@ -83,6 +83,15 @@ def pre_dflash2_render(home, hf):
                         "# QWEN38_EXPERTS=0, when the line carries it: the routing counter (flash-local-experts/, on the PYTHONPATH\n"
                         "# below) loads and does nothing; install-flash-local.sh renders it from the same variable at a switch.\n"
                         "# VLLM_NO_USAGE_STATS and DO_NOT_TRACK:")
+    # the allocator's collection line following the share (2026-11-11) came to both targets after the
+    # fixture too: its note in the unit, and the value, 0.8 at the card's share as the fixture has it
+    text = text.replace("# reference box, 2026-10-20).\n# --security-opt seccomp=seccomp-io-uring.json:",
+                        "# reference box, 2026-10-20). The collection line follows the share the engine is given: 0.04 of the\n"
+                        "# GPU under it, over the ceiling (0.8 at the card's share). Left at 0.8 with the share at 0.85 or 0.87,\n"
+                        "# the engine held more than the line and the allocator collected inside a CUDA graph capture, which\n"
+                        "# CUDA refuses (\"operation not permitted when stream is capturing\"): the boot died after its memory\n"
+                        "# check had passed, at both shares, 2026-11-11. install-flash-local.sh renders the line from the share.\n"
+                        "# --security-opt seccomp=seccomp-io-uring.json:")
     text = text.replace(f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n",
                         f"  -v {home}/.config/qwen38/vllm-auth:/opt/qwen38-auth:ro \\\n"
                         f"  --mount type=bind,source={home}/.config/qwen38/flash-local-experts,target=/opt/experts-plugin,readonly \\\n")

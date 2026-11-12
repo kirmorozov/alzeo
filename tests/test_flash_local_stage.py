@@ -386,16 +386,35 @@ class TheMemoryShare(unittest.TestCase):
         m = re.search(r"--gpu-memory-utilization (\S+)", self.box.out.read_text())
         return m.group(1) if m else None
 
+    def line(self):
+        """The allocator's collection line as the unit renders it: (ceiling, threshold)."""
+        m = re.search(r"-e PYTORCH_CUDA_ALLOC_CONF=per_process_memory_fraction:(\S+),garbage_collection_threshold:(\S+) ",
+                      exec_command(self.box.out.read_text()))
+        return (float(m.group(1)), float(m.group(2))) if m else None
+
     def test_the_cards_share_unless_the_box_chooses_one_which_a_plain_switch_keeps(self):
         rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual((rc, self.share()), (0, "0.8"), out)
         rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE="0.85")
         self.assertEqual((rc, self.share()), (0, "0.85"), out)
+        self.assertEqual(self.line(), (0.95, 0.85), "the allocator's collection line follows the share")
         (self.box.units / "qwen38-flash-local.service").write_text(self.box.out.read_text())   # installed at 0.85
         rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none")
         self.assertEqual((rc, self.share()), (0, "0.85"), "a plain switch keeps the box's share")
         rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE="0.8")
         self.assertEqual((rc, self.share()), (0, "0.8"), "named again, the card's")
+        self.assertEqual(self.line(), (0.95, 0.8), "and so does the line, back to the card's")
+
+    def test_the_allocators_collection_line_stays_under_the_share_at_every_share(self):
+        # the engine holds about the share less the memory outside PyTorch's allocator; the line has to
+        # sit under the share and within 0.05 of it, else the allocator collects inside a CUDA graph
+        # capture and the boot dies (0.85 and 0.87 with the line left at 0.8, reference box, 2026-11-11)
+        for share in ("0.5", "0.6", "0.75", "0.87", "0.88", "0.9", "0.92"):
+            rc, out = self.box.stage(FLASH_LOCAL_PLE_DIR="none", FLASH_LOCAL_MEMORY_SHARE=share)
+            self.assertEqual((rc, self.share()), (0, share), out)
+            ceiling, threshold = self.line()
+            self.assertTrue(float(share) < ceiling < 1.0 and threshold < 1.0, (share, ceiling, threshold))
+            self.assertTrue(float(share) - 0.05 <= ceiling * threshold < float(share), (share, ceiling, threshold))
 
     def test_a_share_outside_the_box_is_refused_by_name(self):
         for bad in ("0.95", "0.4", "85", "abc", "0.855"):

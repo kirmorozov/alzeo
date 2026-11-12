@@ -89,9 +89,13 @@ flash-local` (or `flash-local-dflash2`) renders that share into the unit's `--gp
 card's 0.8 stood fixed; a plain switch after keeps it, and a value outside 0.5 to 0.92 is refused by name before
 anything is fetched or rendered. What the share adds past the weights is KV cache, about 53K tokens of the 262K
 window per GiB and 1.2 GiB per 0.01 of share on a 128 GB box, which is more sessions' prefixes kept between their
-turns and so less prefill; what it takes is the memory the box keeps, 13 GB at 0.8, where the page cache holds the
-PLE table the engine reads at every token. Measured on the reference box, 2026-11-10: 0.8 left 17.7 GiB for 941,957
-tokens.
+turns and so less prefill; what it takes is the memory the box keeps, 13 GB at 0.8, for its own processes and the
+engine's host side (the PLE table is read from the disk over io_uring, not through the page cache: 0.03 GiB of the
+checkpoint resident while serving). Measured on the reference box, 2026-11-10: 0.8 left 17.7 GiB for 941,957
+tokens. The allocator's collection line (`garbage_collection_threshold`, the unit says why it is set) follows the share, 0.04 of
+the GPU under it: left at the card's 0.8 with the share at 0.85 or 0.87, the engine held more than the line, PyTorch
+collected inside a CUDA graph capture, which CUDA refuses, and the boot died after its memory check had passed
+(2026-11-11, both shares; at 0.85 the check had given 24.18 GiB, 1,286,592 tokens).
 
 ## Unreleased: the cockpit's Experts view, the routing of Qwen Next's experts as it happens
 

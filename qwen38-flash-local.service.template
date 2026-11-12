@@ -40,7 +40,11 @@ ExecStartPre=/bin/bash __HOME__/.config/qwen38/engine-preflight.sh qwen38-flash-
 # service. A boot with it kept 19 GiB free at its lowest (1.05 without it) and served with the same
 # KV cache. It ends the dip, not the driver's refusals: three of five boots after had 5 to 233 of
 # them, with 14.1 GiB free or more, cause unknown, and each came up and served (measured on the
-# reference box, 2026-10-20).
+# reference box, 2026-10-20). The collection line follows the share the engine is given: 0.04 of the
+# GPU under it, over the ceiling (0.8 at the card's share). Left at 0.8 with the share at 0.85 or 0.87,
+# the engine held more than the line and the allocator collected inside a CUDA graph capture, which
+# CUDA refuses ("operation not permitted when stream is capturing"): the boot died after its memory
+# check had passed, at both shares, 2026-11-11. install-flash-local.sh renders the line from the share.
 # --security-opt seccomp=seccomp-io-uring.json: the n-gram table is read over io_uring, whose
 # three calls Docker's default seccomp profile refuses. The card turns seccomp and AppArmor off
 # for it; this lane keeps both, with Docker's own default profile (Docker 29.6.2's, unchanged)
@@ -89,7 +93,7 @@ ExecStart=/bin/bash -c 'check=__HOME__/.config/qwen38/flash-local-files.sh; [ -f
   -e VLLM_USE_V2_MODEL_RUNNER=1 -e B12X_POLICY_MODE=auto \
   __LM_HEAD_LINE__-e VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE=w13 \
   -e VLLM_B12X_MOE_FP4_FORCE_A16=1 -e B12X_W4A16_A4_PREFILL=1 \
-  -e PYTORCH_CUDA_ALLOC_CONF=per_process_memory_fraction:0.95,garbage_collection_threshold:0.8 \
+  -e PYTORCH_CUDA_ALLOC_CONF=per_process_memory_fraction:0.95,garbage_collection_threshold:__GC_THRESHOLD__ \
   -v __CACHE_DIR__/vllm:/root/.cache/vllm \
   -v __CACHE_DIR__/flashinfer:/root/.cache/flashinfer \
   -v __CACHE_DIR__/b12x:/root/.cache/b12x \
